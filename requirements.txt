@@ -1,0 +1,32 @@
+# Room Reconstruction Demo - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core ML/AI
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.35.0
+timm>=0.9.0
+accelerate>=0.25.0
+
+# Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-image>=0.21.0
+
+# 3D Processing & Photogrammetry
+open3d>=0.17.0
+trimesh>=4.0.0
+pycolmap>=0.6.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.15.0
+
+# Web Interface
+gradio>=4.0.0
+
+# Utilities
+tqdm>=4.65.0
+termcolor>=2.3.0
