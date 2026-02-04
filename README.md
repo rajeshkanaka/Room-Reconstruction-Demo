@@ -4,8 +4,6 @@
 
 This is a proof-of-concept demonstration application that shows how computer vision and AI can be used to reconstruct room layouts from just a few photographs. Built for the US home renovation market, this demo allows inspectors and property assessors to quickly generate approximate floor plans and 3D visualizations without special equipment.
 
-![Demo Overview](docs/demo_overview.png)
-
 ---
 
 ## 🎯 What This Demo Does
@@ -23,32 +21,34 @@ This is a proof-of-concept demonstration application that shows how computer vis
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- **Python 3.8+**
+- **[uv](https://docs.astral.sh/uv/) — recommended** (or pip + venv)
 - 8GB+ RAM recommended
-- GPU with CUDA support (optional but recommended for speed)
+- GPU with CUDA support (optional; speeds up depth estimation)
 
-### Installation
+### Installation (with uv)
 
 ```bash
-# 1. Clone or navigate to the project directory
-cd room_reconstruction_demo
+# 1. Clone the repository
+git clone https://github.com/rajeshkanaka/Room-Reconstruction-Demo.git
+cd Room-Reconstruction-Demo
 
-# 2. Create a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# Note: On first run, the AI model (~350MB) will be downloaded automatically
+# 2. Install dependencies using uv (creates/uses .venv and requirements.txt)
+uv sync
+# Or, if you prefer to install into an existing venv:
+# uv pip install -r requirements.txt
 ```
+
+### First-time run: model download
+
+**The first time you run the app, the depth estimation model is downloaded from Hugging Face** (e.g. Depth-Anything-V2 or Intel/dpt-large, ~350MB–1GB depending on the model). This can take **several minutes** depending on your connection. Subsequent runs use the cached model and start much faster. No extra steps are required—just run the app and wait on first launch.
 
 ### Running the Demo
 
 #### Option 1: Web Interface (Recommended)
 
 ```bash
-python app.py
+uv run python app.py
 ```
 
 Then open your browser to: **http://localhost:7860**
@@ -56,8 +56,10 @@ Then open your browser to: **http://localhost:7860**
 #### Option 2: Command Line
 
 ```bash
-python run_cli.py path/to/image1.jpg path/to/image2.jpg path/to/image3.jpg
+uv run python run_cli.py path/to/image1.jpg path/to/image2.jpg path/to/image3.jpg
 ```
+
+*(If you installed with pip instead of uv, use `python app.py` and `python run_cli.py`.)*
 
 ---
 
@@ -99,21 +101,24 @@ For best results, follow these guidelines when photographing the room:
 ## 📂 Project Structure
 
 ```
-room_reconstruction_demo/
+Room-Reconstruction-Demo/
 ├── app.py                    # Main Gradio web application
 ├── run_cli.py                # Command-line interface
 ├── config.py                 # Configuration settings
-├── requirements.txt          # Python dependencies
+├── requirements.txt          # Python dependencies (use with uv or pip)
 ├── README.md                 # This file
 │
 ├── modules/                  # Core processing modules
 │   ├── __init__.py
-│   ├── depth_estimator.py    # AI depth estimation from images
+│   ├── depth_estimator.py    # AI depth estimation (Depth-Anything V2 / DPT)
 │   ├── floor_plan_generator.py  # 2D floor plan creation
 │   ├── visualizer_3d.py      # 3D visualization tools
-│   └── room_reconstructor.py # Main orchestration
+│   ├── room_reconstructor.py # Main orchestration
+│   ├── sfm_processor.py      # COLMAP SfM for multi-view alignment
+│   └── dense_reconstructor.py # Dense reconstruction / TSDF fusion
 │
 ├── outputs/                  # Generated outputs (auto-created)
+├── colmap_workspace/         # COLMAP temp files (auto-created)
 └── sample_images/            # Sample test images (add your own)
 ```
 
@@ -126,10 +131,10 @@ This demo uses a multi-stage pipeline to convert 2D photos into 3D representatio
 ### Stage 1: Depth Estimation
 
 ```
-🖼️ Photo → [DPT AI Model] → 🗺️ Depth Map
+🖼️ Photo → [Depth-Anything V2 / DPT AI Model] → 🗺️ Depth Map
 ```
 
-We use the **DPT (Dense Prediction Transformer)** model from Intel, pre-trained on millions of images to predict depth. For each pixel in the photo, the AI estimates how far away that point is from the camera.
+We use **Depth-Anything V2** (or Intel **DPT**) from Hugging Face, pre-trained to predict depth. For each pixel, the AI estimates distance from the camera. **On first run, the model is downloaded automatically** (see [First-time run](#first-time-run-model-download) above).
 
 ### Stage 2: 3D Point Cloud Generation
 
@@ -145,7 +150,7 @@ Using the pinhole camera model and the depth map, we project each pixel into 3D 
 ☁️ Cloud 1 + ☁️ Cloud 2 + ☁️ Cloud 3... → 🏠 Combined Model
 ```
 
-Point clouds from multiple views are combined (with simple rotation offsets) to build a more complete room representation.
+Point clouds from multiple views are aligned using **COLMAP SfM** (structure-from-motion) and optional **TSDF fusion** or ICP registration to build a consistent room representation.
 
 ### Stage 4: Floor Plan Generation
 
@@ -169,8 +174,9 @@ Floor Plan → 📊 2D Image with Measurements
 You can adjust settings in `config.py`:
 
 ```python
-# Depth estimation
-DEPTH_MAX_SIZE = 512      # Max image size (lower = faster)
+# Depth estimation (Depth-Anything V2 or Intel/dpt-large)
+DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Large-hf"
+DEPTH_MAX_SIZE = 518      # Depth Anything V2 optimal (multiple of 14); lower = faster
 
 # 3D reconstruction
 POINT_CLOUD_DENSITY = 4   # Sample rate (higher = fewer points, faster)
@@ -222,7 +228,7 @@ Outputs are saved to the `outputs/` folder:
 - Works best with **rectangular rooms**
 - Struggles with very cluttered spaces
 - Performance depends on image quality and lighting
-- Multiple views are combined with simple offsets (no proper registration)
+- First run is slower while the depth model downloads (see [First-time run](#first-time-run-model-download))
 
 ### What This Demo Cannot Do
 
@@ -276,25 +282,29 @@ self.device = "cpu"  # Force CPU
 - Avoid extreme lens distortion
 - Try adjusting the assumed room width
 
-### Model Download Fails
+### Model Download Fails or First Run Is Slow
 
-The DPT model is downloaded from HuggingFace on first run. If it fails:
-```bash
-# Try manual download
-python -c "from transformers import DPTImageProcessor, DPTForDepthEstimation; DPTImageProcessor.from_pretrained('Intel/dpt-large'); DPTForDepthEstimation.from_pretrained('Intel/dpt-large')"
-```
+The depth model (Depth-Anything-V2 or Intel/dpt-large) is downloaded from Hugging Face **on first run**; this can take several minutes and requires internet. If it fails:
+
+- Ensure you have a stable connection and enough disk space (~1GB for cache).
+- Optional: set `HF_TOKEN` if you hit rate limits on Hugging Face.
+- To pre-download the fallback model (Intel/dpt-large):
+  ```bash
+  uv run python -c "from transformers import DPTImageProcessor, DPTForDepthEstimation; DPTImageProcessor.from_pretrained('Intel/dpt-large'); DPTForDepthEstimation.from_pretrained('Intel/dpt-large')"
+  ```
 
 ---
 
 ## 📚 Dependencies
 
-Main libraries used:
+Install with **uv** (`uv sync`) or **pip** (`pip install -r requirements.txt`). Main libraries:
 
 | Library | Purpose |
 |---------|----------|
 | PyTorch | Deep learning framework |
-| Transformers | DPT depth estimation model |
+| Transformers | Depth-Anything V2 / DPT depth estimation |
 | Open3D | 3D point cloud processing |
+| pycolmap | COLMAP SfM integration |
 | OpenCV | Image processing |
 | Plotly | Interactive 3D visualization |
 | Matplotlib | 2D plotting |
