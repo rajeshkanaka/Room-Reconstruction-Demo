@@ -10,11 +10,11 @@
 ## Progress Tracker
 
 ```
-OVERALL: [##..................] 11% (4/37 steps complete)
+OVERALL: [########............] 43% (16/37 steps complete)
 
-Phase 1 - Metric Depth + Scale:    [#####.....] 50%  (4/8) << CURRENT
-Phase 2 - Wall Detection + Geom:   [..........] 0%  (0/8)
-Phase 3 - Architectural Rendering:  [..........] 0%  (0/8)
+Phase 1 - Metric Depth + Scale:    [##########] 100% (8/8) COMPLETE
+Phase 2 - Wall Detection + Geom:   [##########] 100% (8/8) COMPLETE
+Phase 3 - Architectural Rendering:  [..........] 0%  (0/8) << NEXT
 Phase 4 - Door/Window Detection:    [..........] 0%  (0/6)
 Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 ```
@@ -126,7 +126,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Scale correction factor is reasonable. Known-dimension calibration works within 5%.
 
 ### Step 1.5: Update config.py for metric depth
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add new config constants for metric depth. Keep old constants for backward compatibility but mark as deprecated. Add `METRIC_DEPTH_MODEL`, `METRIC_DEPTH_MODEL_FALLBACK`, `ENABLE_METRIC_DEPTH` (default True), `CALIBRATION_METHOD` (default "auto").
 - **Files to modify:**
   - `config.py`
@@ -135,7 +135,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** New config values importable. Old config values still work.
 
 ### Step 1.6: Wire metric depth into RoomReconstructor
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Modify `RoomReconstructor` to use `MetricDepthEstimator` when `ENABLE_METRIC_DEPTH=True`. Update `process_single_image()` to call `depth_to_3d_points_metric()` instead of the old path. Keep fallback to old `DepthEstimator` when metric model unavailable. Remove `assumed_room_width` as the measurement source (keep as UI hint only for calibrator).
 - **Files to modify:**
   - `modules/room_reconstructor.py` (conditional metric depth path)
@@ -148,7 +148,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Reconstruction completes. Measurements are from metric depth model. `assumed_room_width` no longer directly dictates output dimensions (used only as calibration hint).
 
 ### Step 1.7: Update FloorPlanGenerator to use metric points
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Modify `FloorPlanGenerator.generate_floor_plan()` to detect whether input points are already in meters (metric pipeline) or arbitrary units (legacy pipeline). When metric, skip the `assumed_width / room_width_units` scaling hack at line 136-137. Compute measurements directly from point cloud coordinates.
 - **Files to modify:**
   - `modules/floor_plan_generator.py`
@@ -177,7 +177,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** With metric point clouds, measurements come from actual coordinates, not the assumed-width scaling hack.
 
 ### Step 1.8: Phase 1 integration test
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `tests/test_phase1_metric_depth.py`. End-to-end test: load sample images -> metric depth -> point cloud -> floor plan measurements. Verify the full pipeline works with the new metric depth path. Compare measurements before/after to confirm improvement.
 - **Files to create:**
   - `tests/__init__.py`
@@ -194,7 +194,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 **Validation:** Floor plan polygon for rectangular room has corners within 5cm of ground truth. Polygon is closed.
 
 ### Step 2.1: Implement FloorPlanModel data classes
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create the internal data model in `modules/geometry/floor_plan_model.py`. Define dataclasses: `WallSegment` (start, end, thickness, material), `DoorOpening` (position, width, swing_direction), `WindowOpening` (position, width), `RoomPolygon` (boundary, name, area), `DimensionLine` (start, end, value, offset), `FloorPlanModel` (walls, doors, windows, rooms, dimensions, scale, orientation). This is the single source of truth between detection and rendering.
 - **Files to modify:**
   - `modules/geometry/floor_plan_model.py`
@@ -214,7 +214,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** All dataclasses instantiate correctly. `RoomPolygon.area` computed via Shoelace formula. Serializable to dict/JSON.
 
 ### Step 2.2: Implement RANSAC floor plane detection
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add floor plane detection to `modules/detection/wall_detector.py`. Use Open3D's `segment_plane()` to find the dominant horizontal plane (floor). Return the floor plane equation and inlier mask. This replaces the crude fixed 10-30% height slice in `floor_plan_generator.py:185-209`.
 - **Files to modify:**
   - `modules/detection/__init__.py`
@@ -239,7 +239,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Correctly identifies horizontal floor plane. Inlier mask separates floor from walls.
 
 ### Step 2.3: Implement LSD wall line detection from depth maps
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add wall detection pipeline to `WallDetector`. For each depth map: compute depth gradient -> detect depth discontinuities (wall-floor, wall-wall edges) -> extract line segments using OpenCV LSD (Line Segment Detector). Project wall-floor intersection lines to ground plane. Return wall line segments in metric coordinates.
 - **Files to modify:**
   - `modules/detection/wall_detector.py` (add `detect_walls_from_depth()`)
@@ -261,7 +261,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Detects at least the major wall boundaries from depth discontinuities. Returns line segments, not density blobs.
 
 ### Step 2.4: Manhattan World wall alignment
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add wall alignment to `WallDetector`. Most rooms have walls at 90-degree angles. Detect dominant directions via vanishing point analysis or histogram of line segment angles. Snap detected wall segments to the two dominant perpendicular directions. Merge colinear segments and close gaps.
 - **Files to modify:**
   - `modules/detection/wall_detector.py` (add `align_walls_manhattan()`)
@@ -289,7 +289,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Noisy segments snap to perpendicular axes. Colinear segments merged. Gap tolerance configurable.
 
 ### Step 2.5: Room polygon reconstruction
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/detection/room_segmenter.py` with `RoomSegmenter` class. Takes wall line segments, builds a planar graph of wall connectivity, finds enclosed polygons representing rooms. Handles non-convex shapes (L, U, T rooms). Uses `shapely` for polygon operations. Replaces the convex hull boundary in current system.
 - **Files to modify:**
   - `modules/detection/room_segmenter.py` (new file)
@@ -319,7 +319,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Produces closed polygon for L-shaped room. Area calculation correct. Returns `RoomPolygon` dataclass instances.
 
 ### Step 2.6: Per-wall measurement engine
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/geometry/measurement_engine.py` with `MeasurementEngine` class. Takes `FloorPlanModel` and computes: per-wall length, room width x depth, total area, bounding box dimensions. Results in both metric and imperial. Cross-validates: opposite walls should match in rectangular rooms. Populates `DimensionLine` objects.
 - **Files to modify:**
   - `modules/geometry/measurement_engine.py` (new file)
@@ -347,7 +347,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Per-wall lengths correct. Area correct. Imperial conversions correct. Cross-validation warnings logged for mismatched opposite walls.
 
 ### Step 2.7: Wire detection pipeline into RoomReconstructor
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add the new wall detection + room segmentation pipeline to `RoomReconstructor`. After point cloud fusion, run: floor plane detection -> wall line extraction from depth maps -> Manhattan alignment -> room polygon extraction -> measurement engine. Store `FloorPlanModel` in the result dict alongside the old floor plan data for comparison.
 - **Files to modify:**
   - `modules/room_reconstructor.py`
@@ -360,7 +360,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** New pipeline runs without errors. `FloorPlanModel` is populated in result dict. Old pipeline still works as fallback.
 
 ### Step 2.8: Phase 2 integration test
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `tests/test_phase2_wall_detection.py`. Test wall detection on synthetic depth maps with known wall positions. Test room polygon extraction for rectangular and L-shaped rooms. Verify measurement accuracy.
 - **Files to create:**
   - `tests/test_phase2_wall_detection.py`
@@ -789,4 +789,6 @@ all ─→ 5.5 ─→ 5.6 ─→ 5.7
 | Date | Session | Steps Completed | Notes |
 |------|---------|----------------|-------|
 | 2026-02-09 | Initial | - | Plan created |
-| 2026-02-09 | Session 1 | 1.1, 1.2, 1.3, 1.4 | Scaffolding + MetricDepthEstimator (Depth Pro + DA V2 fallback) + DepthCalibrator + FloorPlanModel dataclasses. Depth Pro loads OK, inference test pending (CPU-only, slow). Next: Step 1.5 (config), 1.6 (wire into RoomReconstructor) |
+| 2026-02-09 | Session 1 | 1.1, 1.2, 1.3, 1.4 | Scaffolding + MetricDepthEstimator (Depth Pro + DA V2 fallback) + DepthCalibrator + FloorPlanModel dataclasses. Depth Pro loads OK, inference test pending (CPU-only, slow). |
+| 2026-02-09 | Session 2 | 1.5, 1.6, 1.7, 1.8 | Phase 1 COMPLETE. Config constants, wired metric depth into RoomReconstructor (conditional path + calibration), FloorPlanGenerator metric mode (scale_factor=1.0 bypasses assumed_width), 15/15 integration tests pass. |
+| 2026-02-09 | Session 2 | 2.1-2.8 | Phase 2 COMPLETE. WallDetector (RANSAC floor plane, depth gradient LSD lines, Manhattan alignment), RoomSegmenter (Shapely polygon extraction, L-shaped rooms), MeasurementEngine (per-wall lengths, chain dimensions, cross-validation), wired into RoomReconstructor. 32/32 tests pass. Next: Phase 3 (rendering). |

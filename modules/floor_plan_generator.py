@@ -62,6 +62,7 @@ class FloorPlanGenerator:
         points: np.ndarray,
         colors: Optional[np.ndarray] = None,
         resolution: int = FLOOR_PLAN_RESOLUTION,
+        is_metric: bool = False,
     ) -> Dict:
         """
         Generate a floor plan from 3D points.
@@ -70,6 +71,9 @@ class FloorPlanGenerator:
             points: 3D points (N, 3) with X, Y, Z coordinates
             colors: Optional RGB colors (N, 3)
             resolution: Grid resolution for the floor plan
+            is_metric: If True, points are already in meters (metric depth pipeline).
+                       Measurements are computed directly from coordinates without
+                       the assumed_width scaling hack.
 
         Returns:
             Dictionary with floor plan data and measurements
@@ -132,10 +136,15 @@ class FloorPlanGenerator:
         boundary = self._extract_room_boundary(occupancy)
 
         # 8. Calculate scale factor
-        room_width_units = x_max - x_min
-        self.scale_factor = (
-            self.assumed_width / room_width_units if room_width_units > 0 else 1.0
-        )
+        if is_metric:
+            # Metric pipeline: points are already in meters, no scaling needed
+            self.scale_factor = 1.0
+        else:
+            # Legacy pipeline: scale from arbitrary units using assumed_width
+            room_width_units = x_max - x_min
+            self.scale_factor = (
+                self.assumed_width / room_width_units if room_width_units > 0 else 1.0
+            )
 
         # 9. Calculate approximate dimensions
         width_meters = (x_max - x_min) * self.scale_factor
@@ -590,11 +599,17 @@ class FloorPlanGenerator:
         ax2.axis("off")
 
         # Add note about approximate measurements
+        if self.scale_factor == 1.0 and measurements.get("scale_factor", 1.0) == 1.0:
+            note = "Note: Measurements derived from metric depth estimation (meters)."
+        else:
+            note = (
+                f"Note: Measurements are approximate estimates based on depth analysis. "
+                f"Scale assumes room width = {self.assumed_width}m."
+            )
         fig.text(
             0.5,
             0.02,
-            f"Note: Measurements are approximate estimates based on depth analysis. "
-            f"Scale assumes room width = {self.assumed_width}m.",
+            note,
             ha="center",
             fontsize=9,
             color="#666",
