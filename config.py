@@ -1,4 +1,4 @@
-"""Configuration settings for Room Reconstruction Demo"""
+"""Configuration settings for Room Reconstruction Demo."""
 
 import os
 
@@ -8,61 +8,104 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 SAMPLE_DIR = os.path.join(BASE_DIR, "sample_images")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 COLMAP_WORKSPACE = os.path.join(BASE_DIR, "colmap_workspace")
+COLMAP_DENSE = os.path.join(COLMAP_WORKSPACE, "dense")
 
 # Ensure directories exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(SAMPLE_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(COLMAP_WORKSPACE, exist_ok=True)
+os.makedirs(COLMAP_DENSE, exist_ok=True)
 
 # Depth Estimation Settings
 # Options: "Intel/dpt-large", "depth-anything/Depth-Anything-V2-Large-hf", "Intel/zoedepth-nyu-kitti"
-DEPTH_MODEL = (
-    "depth-anything/Depth-Anything-V2-Large-hf"  # Upgraded to Depth Anything V2
-)
-DEPTH_MODEL_FALLBACK = "Intel/dpt-large"  # Fallback model if primary fails
-DEPTH_MAX_SIZE = 518  # Depth Anything V2 optimal size (multiple of 14)
+DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Large-hf"
+DEPTH_MODEL_FALLBACK = "Intel/dpt-large"
+DEPTH_MAX_SIZE = 518
 
 # 3D Reconstruction Settings
 POINT_CLOUD_DENSITY = 4  # Sample every Nth pixel (higher = faster, less detail)
-DEPTH_SCALE = 0.5  # Scale factor for depth values
-VOXEL_SIZE = 0.05  # Voxel size for downsampling point cloud
-ENABLE_REGISTRATION = True  # Use point cloud registration between views
-REGISTRATION_VOXEL_SIZE = 0.08  # Downsample size for registration (meters)
-REGISTRATION_RANSAC_ITERATIONS = 50000  # RANSAC iterations for coarse alignment
-REGISTRATION_ICP_ITERATIONS = 50  # ICP refinement iterations
-OUTLIER_NB_NEIGHBORS = 20  # Statistical outlier removal neighbors
-OUTLIER_STD_RATIO = 2.0  # Statistical outlier removal threshold
+DEPTH_SCALE = 0.5  # Relative depth scaling in fallback depth-only pipeline
+VOXEL_SIZE = 0.05
+ENABLE_REGISTRATION = True
+REGISTRATION_VOXEL_SIZE = 0.08
+REGISTRATION_RANSAC_ITERATIONS = 50000
+REGISTRATION_ICP_ITERATIONS = 50
+OUTLIER_NB_NEIGHBORS = 20
+OUTLIER_STD_RATIO = 2.0
 
-# Floor Plan Settings
-FLOOR_PLAN_HEIGHT_MIN = 0.1  # Min height ratio for floor detection
-FLOOR_PLAN_HEIGHT_MAX = 0.3  # Max height ratio for floor detection
-FLOOR_PLAN_RESOLUTION = 100  # Grid resolution for floor plan
-ASSUMED_ROOM_WIDTH_METERS = 4.0  # Assumed room width for scaling
+# Floor Plan Geometry
+FLOOR_PLAN_HEIGHT_MIN = 0.1
+FLOOR_PLAN_HEIGHT_MAX = 0.3
+FLOOR_PLAN_RESOLUTION = 160
+ASSUMED_ROOM_WIDTH_METERS = 4.0  # Quick mode only; accurate mode uses calibration
+MANHATTAN_SNAP_DEFAULT = True
 
 # Visualization Settings
 VISUALIZATION_POINT_SIZE = 2.0
 FIGURE_SIZE = (10, 8)
 
-# Camera Intrinsics (approximate for typical smartphone)
-CAMERA_FX = 500.0  # Focal length X
-CAMERA_FY = 500.0  # Focal length Y
-CAMERA_CX = 256.0  # Principal point X
-CAMERA_CY = 256.0  # Principal point Y
+# Camera Intrinsics fallback (used if SfM intrinsics unavailable)
+CAMERA_FX = 500.0
+CAMERA_FY = 500.0
+CAMERA_CX = 256.0
+CAMERA_CY = 256.0
 
-# SfM (Structure-from-Motion) Settings
-ENABLE_SFM = True  # Use COLMAP SfM for proper multi-view reconstruction
-SFM_MIN_IMAGES = 3  # Minimum images required for SfM
-SFM_FEATURE_TYPE = "SIFT"  # Feature type: SIFT, ORB, SUPERPOINT
-SFM_MATCHER_TYPE = "exhaustive"  # Matcher: exhaustive, sequential, vocab_tree
-SFM_MAX_IMAGE_SIZE = 1024  # Max image size for SfM processing
+# SfM (Structure-from-Motion)
+ENABLE_SFM = True
+SFM_MIN_IMAGES = 3
+SFM_FEATURE_TYPE = "SIFT"
+SFM_MATCHER_TYPE = "exhaustive"
+SFM_MAX_IMAGE_SIZE = 1024
+SFM_ENABLE_DENSE_MVS = True
+SFM_INIT_NUM_TRIALS = 600
+SFM_MIN_NUM_MATCHES = 12
+SFM_MIN_MODEL_SIZE = 3
 
-# Dense Reconstruction Settings
-ENABLE_MVS = True  # Enable Multi-View Stereo dense reconstruction
-MVS_MAX_IMAGE_SIZE = 1000  # Max image size for MVS
-DEPTH_FUSION_METHOD = "tsdf"  # Options: tsdf, poisson
+# SfM matching/verification tolerance (helps with low-parallax indoor capture)
+SFM_MATCH_GUIDED = True
+SFM_MATCH_CROSS_CHECK = False
+SFM_MATCH_MAX_RATIO = 0.9
+SFM_MATCH_MAX_DISTANCE = 0.85
+SFM_VERIFY_MIN_INLIERS = 12
+SFM_VERIFY_MIN_EF_INLIER_RATIO = 0.85
+SFM_VERIFY_RANSAC_MAX_ERROR = 6.0
+
+# SfM mapper tolerance (still quality-gated later)
+SFM_INIT_MIN_NUM_INLIERS = 40
+SFM_INIT_MIN_TRI_ANGLE = 4.0
+SFM_INIT_MAX_ERROR = 12.0
+SFM_INIT_MAX_FORWARD_MOTION = 0.999
+SFM_ABS_POSE_MIN_NUM_INLIERS = 20
+SFM_ABS_POSE_MIN_INLIER_RATIO = 0.15
+SFM_FILTER_MIN_TRI_ANGLE = 0.5
+SFM_ALLOW_TWO_VIEW_TRACKS = True
+
+# Dense Reconstruction
+ENABLE_MVS = True
+MVS_MAX_IMAGE_SIZE = 1200
+DEPTH_FUSION_METHOD = "tsdf"
 
 # Mesh Settings
-MESH_DEPTH = 9  # Poisson reconstruction depth (higher = more detail)
-MESH_SCALE = 1.1  # Scale for mesh bounding box
-MESH_SIMPLIFY_TARGET = 100000  # Target face count for mesh simplification
+MESH_DEPTH = 9
+MESH_SCALE = 1.1
+MESH_SIMPLIFY_TARGET = 100000
+
+# Compliance / Accuracy mode defaults
+DEFAULT_COMPLIANCE_PROFILE = "us_residential_v1"
+ACCURATE_MODE_DEFAULT = True
+
+# Quality gate thresholds (profile defaults still apply)
+QUALITY_MIN_IMAGES = 6
+QUALITY_TARGET_IMAGES = 8
+QUALITY_BLUR_LAPLACIAN_MIN = 80.0
+QUALITY_MIN_OVERLAP_RATIO = 0.12
+QUALITY_MIN_REGISTRATION_RATIO = 0.70
+
+# Diagnostic mode (testing only): relax only the SfM registration ratio gate
+DIAGNOSTIC_MIN_REGISTRATION_RATIO = 0.33
+
+# Calibration / tolerance
+CALIBRATION_MAX_UNCERTAINTY_MM = 8.0
+CRITICAL_TOLERANCE_MM = 15.0
+OVERALL_TOLERANCE_MM = 30.0

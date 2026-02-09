@@ -1,330 +1,397 @@
-# 🏠 Room Reconstruction Demo
+# Room Reconstruction Demo
 
-**Transform simple room photos into 2D floor plans and interactive 3D models using AI!**
+A standards-oriented single-room reconstruction system that converts photos into calibrated 2D floor plans and 3D geometry with QA outputs.
 
-This is a proof-of-concept demonstration application that shows how computer vision and AI can be used to reconstruct room layouts from just a few photographs. Built for the US home renovation market, this demo allows inspectors and property assessors to quickly generate approximate floor plans and 3D visualizations without special equipment.
+## 1) What This Project Is
 
----
+This repository implements a two-pass pipeline for room reconstruction:
 
-## 🎯 What This Demo Does
+- Pass 1: Build provisional geometry and run capture quality gates.
+- Pass 2: Apply known-distance calibration, generate final deliverables, and evaluate compliance status.
 
-- **Input:** 4-5 photographs of a room taken from different angles
-- **Output:**
-  - 2D Floor Plan with approximate dimensions (meters & feet)
-  - Interactive 3D Model visualization
-  - Room measurements (width, depth, area)
-  - Downloadable files (PLY point cloud, HTML 3D viewer)
+Primary target profile:
 
----
+- `us_residential_v1` (ANSI/Fannie aligned reporting profile for software-generated floor plans).
 
-## 🚀 Quick Start
+Important scope statement:
+
+- This project is aligned to profile-driven reporting and QA metrics.
+- It does **not** claim blanket ANSI certification for all room-dimension practices.
+
+## 2) Competition-Grade Positioning
+
+This README is written for technical due diligence and industry review:
+
+- Explicit compliance profile thresholds and pass/fail behavior.
+- Fail-closed accurate mode for insufficient capture or bad calibration.
+- Deliverable contract: PNG + DXF + QA JSON.
+- Transparent status model and troubleshooting guidance.
+
+## 3) Core Deliverables
+
+After successful finalization (Pass 2), the system produces:
+
+- Calibrated floor plan PNG.
+- CAD-compatible DXF.
+- QA report JSON with capture, calibration, SfM, and tolerance metrics.
+- Interactive 3D HTML viewer.
+- Point cloud PLY.
+
+Typical output files in `/outputs`:
+
+- `floor_plan_<timestamp>.png`
+- `floor_plan_<timestamp>.dxf`
+- `qa_report_<timestamp>.json`
+- `room_3d_<timestamp>.html`
+- `room_pointcloud_<timestamp>.ply`
+
+DXF layer set:
+
+- `A-WALL-EXT`
+- `A-WALL-INT`
+- `A-OPENING`
+- `A-DIMS`
+- `A-ANNO`
+
+## 4) Workflow Overview
+
+### Pass 1: Analyze and Build Provisional Plan
+
+Pass 1 performs:
+
+- SfM and geometric reconstruction.
+- Capture quality gate evaluation.
+- Provisional floor plan generation.
+- Session creation for calibration.
+
+Pass 1 status outcomes:
+
+- `NEEDS_CALIBRATION`: quality gate passed; proceed to Pass 2.
+- `INSUFFICIENT_CAPTURE`: fail-closed; improve capture and rerun.
+- `NON_COMPLIANT_QUICK_MODE`: quick mode output only; not standards-compliant final output.
+
+### Pass 2: Calibrate and Finalize
+
+Pass 2 requires:
+
+- Exactly two clicked points on the provisional plan.
+- A known real-world distance and unit (`m`, `ft`, `in`).
+
+Pass 2 performs:
+
+- Scale factor computation from clicked segment and known distance.
+- Calibration uncertainty check against profile threshold.
+- Global geometry scaling.
+- Final output generation (PNG + DXF + QA JSON).
+- Compliance status computation.
+
+Pass 2 final statuses:
+
+- `PASS`: quality + calibration + profile tolerances passed.
+- `FAIL`: calibration or tolerance checks failed.
+- `DIAGNOSTIC_ONLY`: diagnostic mode was enabled; output is testing-only.
+
+## 5) Compliance Profiles and Thresholds
+
+| Profile | Intended context | Min images | Min registration ratio | Calibration uncertainty max | Critical tolerance | Overall tolerance |
+|---|---|---:|---:|---:|---:|---:|
+| `us_residential_v1` | ANSI/Fannie aligned residential reporting | 6 | 70% | 8 mm | 15 mm | 30 mm |
+| `commercial_boma_v1` | Future commercial profile | 8 | 75% | 6 mm | 12 mm | 25 mm |
+| `global_ipms_v1` | Future global profile | 8 | 75% | 6 mm | 12 mm | 25 mm |
+
+Notes:
+
+- `commercial_boma_v1` and `global_ipms_v1` are present as profile frameworks; method scope remains single-room v1.
+- Accurate mode uses fail-closed behavior when quality/calibration gates fail.
+
+## 6) Accuracy and QA Semantics
+
+QA report accuracy metrics are computed from:
+
+- Calibration uncertainty.
+- Mean reprojection error from SfM.
+
+Current implementation uses proxy predicted metrics:
+
+- `predicted_critical_error_mm`
+- `predicted_overall_error_mm`
+
+These are compared against profile thresholds for pass/fail logic. Ground-truth benchmark datasets are a recommended next step for production-grade validation.
+
+## 7) Capture Protocol (Recommended)
+
+For robust indoor reconstruction and stable calibration:
+
+- Capture 8-12 photos (minimum profile threshold still applies).
+- Maintain strong overlap between adjacent photos.
+- Move camera position between shots (translation, not only rotation).
+- Keep images sharp; avoid motion blur.
+- Include floor-wall intersections in multiple views.
+- Use consistent focal setting if possible.
+- Measure one reliable physical span for Pass 2 calibration.
+
+Calibration click guidance:
+
+- Pick two clear structural endpoints on a long segment.
+- Avoid ambiguous textured regions.
+- Use the same segment for real-world tape measurement.
+
+## 8) Installation
 
 ### Prerequisites
 
-- **Python 3.8+**
-- **[uv](https://docs.astral.sh/uv/) — recommended** (or pip + venv)
-- 8GB+ RAM recommended
-- GPU with CUDA support (optional; speeds up depth estimation)
+- Python 3.9+
+- `uv` (recommended) or `pip`
+- macOS/Linux/Windows
+- Optional GPU improves performance
 
-### Installation (with uv)
+### Install with uv
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/rajeshkanaka/Room-Reconstruction-Demo.git
 cd Room-Reconstruction-Demo
 
-# 2. Install dependencies using uv (creates/uses .venv and requirements.txt)
-uv sync
-# Or, if you prefer to install into an existing venv:
-# uv pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
-### First-time run: model download
+### Install with pip
 
-**The first time you run the app, the depth estimation model is downloaded from Hugging Face** (e.g. Depth-Anything-V2 or Intel/dpt-large, ~350MB–1GB depending on the model). This can take **several minutes** depending on your connection. Subsequent runs use the cached model and start much faster. No extra steps are required—just run the app and wait on first launch.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-### Running the Demo
+First run behavior:
 
-#### Option 1: Web Interface (Recommended)
+- The depth model is downloaded from Hugging Face on first execution.
+- Initial startup may take several minutes depending on network and hardware.
+
+## 9) Run the Application
+
+### Web UI
 
 ```bash
 uv run python app.py
 ```
 
-Then open your browser to: **http://localhost:7860**
+Open:
 
-#### Option 2: Command Line
+- `http://127.0.0.1:7870`
+
+UI highlights:
+
+- Bulk multi-image upload is supported.
+- Pass 2 failures retain Pass 1 preview (no blanking of visuals).
+
+### CLI
+
+Pass 1 only:
 
 ```bash
-uv run python run_cli.py path/to/image1.jpg path/to/image2.jpg path/to/image3.jpg
+uv run python run_cli.py sample_images/*.jpeg --compliance-profile us_residential_v1
 ```
 
-*(If you installed with pip instead of uv, use `python app.py` and `python run_cli.py`.)*
+Quick mode (non-compliant fast run):
 
----
-
-## 📷 How to Take Good Photos
-
-For best results, follow these guidelines when photographing the room:
-
-### Photo Recommendations
-
-1. **Take 4-5 photos** from different corners of the room
-2. **Stand in corners** and photograph towards the opposite corner
-3. **Include the floor** and at least 2 walls in each shot
-4. **Use good lighting** - natural daylight works best
-5. **Hold the camera level** - avoid tilting up or down
-
-### Example Photo Positions
-
-```
-┌───────────────────┐
-│ 📷⇘            📷⇙ │   Photo 1: From corner A looking at C
-│  A              B  │   Photo 2: From corner B looking at D
-│                    │   Photo 3: From corner C looking at A
-│                    │   Photo 4: From corner D looking at B
-│  D              C  │   Photo 5: From center (optional)
-│ 📷⇗            📷⇖ │
-└───────────────────┘
+```bash
+uv run python run_cli.py sample_images/*.jpeg --quick-mode
 ```
 
-### What to Avoid
+Diagnostic mode (testing only):
 
-- ❌ Photos from the same angle
-- ❌ Extreme wide-angle distortion
-- ❌ Very dark or overexposed images
-- ❌ Photos that don't show the floor
-- ❌ Motion blur
-
----
-
-## 📂 Project Structure
-
+```bash
+uv run python run_cli.py sample_images/*.jpeg --diagnostic-mode
 ```
+
+Pass 2 from CLI requires calibration points JSON:
+
+```json
+{
+  "point1_px": [100.0, 220.0],
+  "point2_px": [820.0, 220.0]
+}
+```
+
+Finalize:
+
+```bash
+uv run python run_cli.py sample_images/*.jpeg \
+  --compliance-profile us_residential_v1 \
+  --known-distance 12.5 \
+  --known-distance-unit ft \
+  --calibration-points-json calibration_points.json
+```
+
+## 10) Status Model Reference
+
+| Status | Meaning | What to do next |
+|---|---|---|
+| `NEEDS_CALIBRATION` | Pass 1 succeeded and session is active | Run Pass 2 with known distance |
+| `INSUFFICIENT_CAPTURE` | Quality gate failed | Retake or add better photos |
+| `NON_COMPLIANT_QUICK_MODE` | Quick mode output only | Use accurate mode for standards path |
+| `PASS` | Finalized output passed gates/tolerances | Use deliverables |
+| `FAIL` | Finalization failed | Fix calibration/capture and rerun |
+| `DIAGNOSTIC_ONLY` | Diagnostic mode was enabled | Do not treat as standards-compliant |
+
+## 11) Project Architecture
+
+Primary modules:
+
+- `modules/room_reconstructor.py`: orchestration and two-pass lifecycle.
+- `modules/sfm_processor.py`: pycolmap/COLMAP SfM + optional dense MVS hooks.
+- `modules/dense_reconstructor.py`: TSDF fusion and dense geometry assembly.
+- `modules/floor_plan_generator.py`: floor plane normalization, wall extraction, 2D geometry.
+- `modules/calibration.py`: scale factor and uncertainty computation.
+- `modules/quality_gate.py`: image-count, blur, overlap, registration gating.
+- `modules/qa_report.py`: compliance metrics and JSON report generation.
+- `modules/dxf_exporter.py`: calibrated DXF export.
+- `app.py`: Gradio UI, pass-1/pass-2 UX.
+- `run_cli.py`: CLI workflow.
+
+For deeper engineering detail:
+
+- See `/ARCHITECTURE.md`.
+
+Repository layout:
+
+```text
 Room-Reconstruction-Demo/
-├── app.py                    # Main Gradio web application
-├── run_cli.py                # Command-line interface
-├── config.py                 # Configuration settings
-├── requirements.txt          # Python dependencies (use with uv or pip)
-├── README.md                 # This file
-│
-├── modules/                  # Core processing modules
-│   ├── __init__.py
-│   ├── depth_estimator.py    # AI depth estimation (Depth-Anything V2 / DPT)
-│   ├── floor_plan_generator.py  # 2D floor plan creation
-│   ├── visualizer_3d.py      # 3D visualization tools
-│   ├── room_reconstructor.py # Main orchestration
-│   ├── sfm_processor.py      # COLMAP SfM for multi-view alignment
-│   └── dense_reconstructor.py # Dense reconstruction / TSDF fusion
-│
-├── outputs/                  # Generated outputs (auto-created)
-├── colmap_workspace/         # COLMAP temp files (auto-created)
-└── sample_images/            # Sample test images (add your own)
+|- app.py
+|- run_cli.py
+|- config.py
+|- requirements.txt
+|- ARCHITECTURE.md
+|- README.md
+|- modules/
+|  |- room_reconstructor.py
+|  |- sfm_processor.py
+|  |- dense_reconstructor.py
+|  |- floor_plan_generator.py
+|  |- calibration.py
+|  |- quality_gate.py
+|  |- qa_report.py
+|  |- dxf_exporter.py
+|  |- depth_estimator.py
+|  |- visualizer_3d.py
+|- outputs/
+|- colmap_workspace/
+|- sample_images/
+|- tests/
 ```
 
----
+Technology stack:
 
-## 🔧 How It Works
+| Component | Primary libraries |
+|---|---|
+| Depth inference | `torch`, `transformers`, `timm`, `accelerate` |
+| Photogrammetry | `pycolmap` |
+| 3D geometry and fusion | `open3d`, `numpy`, `scipy` |
+| Image processing | `opencv-python`, `Pillow`, `scikit-image` |
+| Floor plan and reporting | `matplotlib`, `ezdxf`, built-in `json` |
+| Visualization and UI | `plotly`, `gradio` |
 
-This demo uses a multi-stage pipeline to convert 2D photos into 3D representations:
+## 12) Configuration Essentials
 
-### Stage 1: Depth Estimation
+Main configuration file:
 
-```
-🖼️ Photo → [Depth-Anything V2 / DPT AI Model] → 🗺️ Depth Map
-```
+- `/config.py`
 
-We use **Depth-Anything V2** (or Intel **DPT**) from Hugging Face, pre-trained to predict depth. For each pixel, the AI estimates distance from the camera. **On first run, the model is downloaded automatically** (see [First-time run](#first-time-run-model-download) above).
+Key controls:
 
-### Stage 2: 3D Point Cloud Generation
+- `DEFAULT_COMPLIANCE_PROFILE`
+- `ACCURATE_MODE_DEFAULT`
+- `DIAGNOSTIC_MIN_REGISTRATION_RATIO`
+- `SFM_*` tuning options
+- `MVS_MAX_IMAGE_SIZE`
+- `ASSUMED_ROOM_WIDTH_METERS` (quick mode only)
 
-```
-🗺️ Depth Map + 📷 Camera Model → ☁️ 3D Point Cloud
-```
+## 13) Troubleshooting
 
-Using the pinhole camera model and the depth map, we project each pixel into 3D space, creating a colored point cloud.
+### "Calibration uncertainty too high (...)"
 
-### Stage 3: Multi-View Combination
+Cause:
 
-```
-☁️ Cloud 1 + ☁️ Cloud 2 + ☁️ Cloud 3... → 🏠 Combined Model
-```
+- Click points are noisy/ambiguous or chosen on weak-support region.
 
-Point clouds from multiple views are aligned using **COLMAP SfM** (structure-from-motion) and optional **TSDF fusion** or ICP registration to build a consistent room representation.
+Fix:
 
-### Stage 4: Floor Plan Generation
+- Re-run Pass 1 and click clearer, farther structural points.
+- Use exact measured distance for the same segment.
+- Prefer `us_residential_v1` unless commercial threshold is explicitly required.
 
-```
-🏠 3D Model → [Top-Down Projection] → 📏 Floor Plan
-```
+### "Calibration session not found or expired"
 
-We take a "bird's eye view" of the point cloud, creating a 2D density map that represents the room layout. Edge detection identifies walls.
+Cause:
 
-### Stage 5: Visualization
+- App restarted or session invalidated between passes.
 
-```
-Floor Plan → 📊 2D Image with Measurements
-3D Model → 🎮 Interactive Plotly Viewer
-```
+Fix:
 
----
+- Run Pass 1 again, then immediately run Pass 2.
 
-## ⚙️ Configuration
+### SfM logs show repeated "No good initial image pair" or partial registrations
 
-You can adjust settings in `config.py`:
+Cause:
 
-```python
-# Depth estimation (Depth-Anything V2 or Intel/dpt-large)
-DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Large-hf"
-DEPTH_MAX_SIZE = 518      # Depth Anything V2 optimal (multiple of 14); lower = faster
+- Low overlap, low parallax, blur, or weak texture.
 
-# 3D reconstruction
-POINT_CLOUD_DENSITY = 4   # Sample rate (higher = fewer points, faster)
-VOXEL_SIZE = 0.05         # Voxel size for downsampling
+Fix:
 
-# Floor plan
-ASSUMED_ROOM_WIDTH_METERS = 4.0  # Default room width assumption
-```
+- Retake with stronger translation and overlap.
+- Increase photo count and viewpoint diversity.
 
----
+### "PatchMatch requires CUDA but COLMAP was not compiled with it"
 
-## 📊 Understanding the Output
+Cause:
 
-### Floor Plan
+- Dense PatchMatch path requires CUDA-enabled COLMAP build.
 
-The floor plan shows:
-- **Layout Map:** Top-down view showing point density (blue = more data)
-- **Schematic:** Simplified room outline with dimensions
-- **Measurements:** Width, depth, and area in both metric and imperial
+Impact:
 
-### 3D Model
+- Dense MVS stage is skipped; pipeline still proceeds via available geometry paths.
 
-The interactive 3D viewer allows you to:
-- Rotate the model (click and drag)
-- Zoom in/out (scroll)
-- Pan (right-click and drag)
-- Hover for coordinates
+### Open3D warning about clamped PLY colors
 
-### Exported Files
+Cause:
 
-Outputs are saved to the `outputs/` folder:
-- `floor_plan_TIMESTAMP.png` - Floor plan image
-- `room_3d_TIMESTAMP.html` - Standalone 3D viewer (shareable)
-- `room_pointcloud_TIMESTAMP.ply` - Point cloud file (for 3D software)
+- Color value normalization at write time.
 
----
+Impact:
 
-## ⚠️ Limitations & Caveats
+- Typically benign for geometry; mostly a color-range warning.
 
-### Accuracy
+## 14) Verification
 
-- **Measurements are APPROXIMATE** - typically within ±20-30%
-- The system assumes a room width to calculate scale
-- Depth estimation is based on AI inference, not actual measurements
-- **Not suitable for construction, legal, or professional purposes**
+Run sanity checks:
 
-### Technical Limitations
-
-- Works best with **rectangular rooms**
-- Struggles with very cluttered spaces
-- Performance depends on image quality and lighting
-- First run is slower while the depth model downloads (see [First-time run](#first-time-run-model-download))
-
-### What This Demo Cannot Do
-
-- Detect doors, windows, or furniture precisely
-- Provide sub-centimeter accuracy
-- Work reliably with just 1 photo
-- Handle outdoor scenes or very large spaces
-
----
-
-## 🔮 Future Improvements
-
-For a production system, consider:
-
-1. **Better Multi-View Registration:** Use ICP or feature matching to properly align point clouds
-2. **Reference Object Scaling:** Detect known objects (doors, A4 paper) for accurate scale
-3. **Semantic Segmentation:** Identify walls, floors, furniture, doors, windows
-4. **Advanced Reconstruction:** Use NeRF or 3D Gaussian Splatting for photorealistic results
-5. **LiDAR Integration:** Support phones with LiDAR for direct depth capture
-6. **Cloud Processing:** Offload heavy computation to cloud GPUs
-
----
-
-## 🛠️ Troubleshooting
-
-### "CUDA out of memory" Error
-
-Reduce memory usage:
-```python
-# In config.py
-DEPTH_MAX_SIZE = 384  # Reduce from 512
-POINT_CLOUD_DENSITY = 6  # Increase from 4
+```bash
+uv run python -m py_compile app.py modules/sfm_processor.py
+uv run python -m unittest discover -s tests -v
 ```
 
-Or use CPU (slower but works):
-```python
-# In modules/depth_estimator.py, change:
-self.device = "cpu"  # Force CPU
-```
+## 15) Current Limitations
 
-### Slow Processing
+- Scope is single-room v1.
+- Final accuracy is capture-dependent.
+- QA metrics are proxy predictions, not full ground-truth benchmark certification.
+- Commercial/global profiles exist as structured placeholders and tighter threshold presets.
 
-- Use a GPU if available (install CUDA-enabled PyTorch)
-- Reduce image sizes before uploading
-- Adjust `POINT_CLOUD_DENSITY` in config
+## 16) Roadmap
 
-### Poor Results
+- Ground-truth dataset benchmarking and acceptance dashboards.
+- Richer CAD semantics (openings, symbols, annotation standards).
+- Automated calibration aid overlays and click-quality guidance.
+- Expanded profile implementations beyond v1 room scope.
 
-- Take more photos from different angles
-- Ensure good, even lighting
-- Avoid extreme lens distortion
-- Try adjusting the assumed room width
+## 17) License and Acknowledgments
 
-### Model Download Fails or First Run Is Slow
+No separate license file is currently included in this repository. Add a project license before external redistribution.
 
-The depth model (Depth-Anything-V2 or Intel/dpt-large) is downloaded from Hugging Face **on first run**; this can take several minutes and requires internet. If it fails:
+Acknowledgments:
 
-- Ensure you have a stable connection and enough disk space (~1GB for cache).
-- Optional: set `HF_TOKEN` if you hit rate limits on Hugging Face.
-- To pre-download the fallback model (Intel/dpt-large):
-  ```bash
-  uv run python -c "from transformers import DPTImageProcessor, DPTForDepthEstimation; DPTImageProcessor.from_pretrained('Intel/dpt-large'); DPTForDepthEstimation.from_pretrained('Intel/dpt-large')"
-  ```
-
----
-
-## 📚 Dependencies
-
-Install with **uv** (`uv sync`) or **pip** (`pip install -r requirements.txt`). Main libraries:
-
-| Library | Purpose |
-|---------|----------|
-| PyTorch | Deep learning framework |
-| Transformers | Depth-Anything V2 / DPT depth estimation |
-| Open3D | 3D point cloud processing |
-| pycolmap | COLMAP SfM integration |
-| OpenCV | Image processing |
-| Plotly | Interactive 3D visualization |
-| Matplotlib | 2D plotting |
-| Gradio | Web interface |
-
----
-
-## 📄 License
-
-This demo is provided for educational and proof-of-concept purposes.
-
----
-
-## 🙏 Acknowledgments
-
-- **Intel** for the DPT depth estimation model
-- **HuggingFace** for model hosting and Transformers library
-- **Hosta.ai** for inspiration on the use case
-- **Open3D** team for excellent 3D processing tools
-
----
-
-*Built as a proof-of-concept for the US home renovation market* 🏠
+- COLMAP and pycolmap communities.
+- Open3D contributors.
+- PyTorch and Hugging Face ecosystems.

@@ -1,27 +1,40 @@
-"""Room Reconstruction Demo Modules
+"""Room Reconstruction Demo modules package.
 
-This package provides the core functionality for 3D room reconstruction:
-- DepthEstimator: AI-based monocular depth estimation (Depth Anything V2)
-- SfMProcessor: Structure-from-Motion using COLMAP
-- DenseReconstructor: TSDF fusion for dense reconstruction
-- FloorPlanGenerator: 2D floor plan extraction with measurements
-- Visualizer3D: 3D visualization and mesh generation
-- RoomReconstructor: Main orchestrator combining all modules
+Heavy dependencies are imported lazily so lightweight utilities (calibration,
+profiles, QA report builders) can be used even when CV/ML dependencies are
+not installed yet.
 """
 
-from .depth_estimator import DepthEstimator
-from .floor_plan_generator import FloorPlanGenerator
-from .visualizer_3d import Visualizer3D, ScaleEstimator
-from .room_reconstructor import RoomReconstructor
-from .sfm_processor import SfMProcessor
-from .dense_reconstructor import DenseReconstructor
+from .calibration import CalibrationInput
+from .compliance_profile import ComplianceProfile, get_compliance_profile
+from .dxf_exporter import DXFExporter
+from .qa_report import build_qa_report, save_qa_report
+from .quality_gate import QualityGateResult, evaluate_capture_quality
+
+try:  # Optional heavy imports
+    from .depth_estimator import DepthEstimator
+    from .dense_reconstructor import DenseReconstructor
+    from .floor_plan_generator import FloorPlanGenerator
+    from .room_reconstructor import RoomReconstructor
+    from .sfm_processor import SfMProcessor
+    from .visualizer_3d import ScaleEstimator, Visualizer3D
+except Exception:  # pragma: no cover
+    pass
 
 __all__ = [
+    "CalibrationInput",
+    "ComplianceProfile",
+    "get_compliance_profile",
+    "DXFExporter",
+    "build_qa_report",
+    "save_qa_report",
+    "QualityGateResult",
+    "evaluate_capture_quality",
     "DepthEstimator",
+    "DenseReconstructor",
     "FloorPlanGenerator",
-    "Visualizer3D",
-    "ScaleEstimator",
     "RoomReconstructor",
     "SfMProcessor",
-    "DenseReconstructor",
+    "ScaleEstimator",
+    "Visualizer3D",
 ]

@@ -1,42 +1,28 @@
-"""
-Room Reconstruction Demo Application
-
-A web-based interface for reconstructing rooms from photographs.
-Uses depth estimation AI to create 3D models and floor plans.
-
-Usage:
-    python app.py
-
-This will launch a Gradio web interface accessible at http://localhost:7860
-"""
+"""Room Reconstruction Demo application with two-pass calibration flow."""
 
 import os
 import sys
+from typing import List, Tuple
 
-# Fix OpenMP issue on macOS (multiple libiomp loaded)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import gradio as gr
-import numpy as np
 import matplotlib
-
-matplotlib.use("Agg")  # Use non-interactive backend
-import matplotlib.pyplot as plt
+import numpy as np
 from PIL import Image
-import tempfile
 
-# Add project root to path
+matplotlib.use("Agg")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import OUTPUT_DIR, ASSUMED_ROOM_WIDTH_METERS
+from config import DEFAULT_COMPLIANCE_PROFILE
 from modules.room_reconstructor import RoomReconstructor
 
-# Global reconstructor instance (lazy loaded)
 _reconstructor = None
 
 
-def get_reconstructor():
-    """Get or create the reconstructor instance (lazy loading)."""
+def get_reconstructor() -> RoomReconstructor:
+    """Get singleton reconstructor instance."""
     global _reconstructor
     if _reconstructor is None:
         print("\n" + "=" * 60)
@@ -46,274 +32,508 @@ def get_reconstructor():
     return _reconstructor
 
 
-def process_images(img1, img2, img3, img4, img5, room_width, progress=gr.Progress()):
-    """
-    Process uploaded images and generate reconstruction.
 
-    Args:
-        img1-img5: Uploaded images (PIL Images or numpy arrays)
-        room_width: Assumed room width for scaling
-        progress: Gradio progress tracker
+def _resolve_uploaded_path(file_obj) -> str:
+    """Extract a filesystem path from a Gradio uploaded file object."""
+    if file_obj is None:
+        return ""
+    if isinstance(file_obj, str):
+        return file_obj
+    if hasattr(file_obj, "name"):
+        return str(file_obj.name)
+    if isinstance(file_obj, dict):
+        path = file_obj.get("path") or file_obj.get("name")
+        return str(path) if path else ""
+    return ""
 
-    Returns:
-        Tuple of (floor_plan_image, 3d_plot, measurements_text, status)
-    """
-    # Collect non-None images
-    images = [img for img in [img1, img2, img3, img4, img5] if img is not None]
 
-    if len(images) < 2:
-        return (
-            None,
-            None,
-            "⚠️ Please upload at least 2 images of the room.",
-            "❌ Error: Not enough images",
+def _collect_images(images: List[object]) -> List[np.ndarray]:
+    out = []
+    for img in images:
+        if img is None:
+            continue
+
+        arr = None
+        if isinstance(img, (str, os.PathLike)) or hasattr(img, "name"):
+            img_path = _resolve_uploaded_path(img)
+            if not img_path or not os.path.exists(img_path):
+                continue
+            with Image.open(img_path) as pil_img:
+                arr = np.array(pil_img.convert("RGB"))
+        elif isinstance(img, Image.Image):
+            arr = np.array(img.convert("RGB"))
+        else:
+            arr = img
+
+        if arr.ndim == 2:
+            arr = np.stack([arr] * 3, axis=-1)
+        elif arr.shape[-1] == 4:
+            arr = arr[:, :, :3]
+
+        out.append(arr)
+    return out
+
+
+
+def _format_measurements(result: dict) -> str:
+    """Render measurements + compliance summary markdown."""
+    m = result.get("measurements", {})
+    c = result.get("compliance", {})
+    status = result.get("status", "UNKNOWN")
+    diagnostic_mode = bool(result.get("diagnostic_mode", False))
+
+    quality = result.get("quality_gate", {})
+    quality_lines = []
+    if quality:
+        quality_lines.append(f"- Quality gate pass: `{quality.get('passed', False)}`")
+        failures = quality.get("failures", [])
+        if failures:
+            quality_lines.append("- Capture issues:")
+            for f in failures:
+                quality_lines.append(f"  - {f}")
+
+    calibration = result.get("calibration", {})
+    calibration_line = ""
+    if calibration:
+        calibration_line = (
+            f"- Calibration uncertainty: {calibration.get('uncertainty_mm', 0):.2f} mm"
         )
 
-    try:
-        progress(0.1, desc="Initializing AI model...")
-        reconstructor = get_reconstructor()
-        reconstructor.assumed_room_width = float(room_width)
-        reconstructor.floor_plan_gen.assumed_width = float(room_width)
+    diagnostic_line = ""
+    if diagnostic_mode:
+        diagnostic_line = (
+            "- Diagnostic mode: `ON` (registration gate relaxed for testing; not standards-compliant output)"
+        )
 
-        # Convert images to numpy arrays
-        image_arrays = []
-        for i, img in enumerate(images):
-            progress(0.1 + 0.1 * i, desc=f"Preparing image {i+1}...")
-            if isinstance(img, Image.Image):
-                img_array = np.array(img)
-            else:
-                img_array = img
-            # Ensure RGB
-            if len(img_array.shape) == 2:
-                img_array = np.stack([img_array] * 3, axis=-1)
-            elif img_array.shape[-1] == 4:
-                img_array = img_array[:, :, :3]
-            image_arrays.append(img_array)
+    accuracy = result.get("accuracy_metrics", {})
+    accuracy_lines = []
+    if accuracy:
+        accuracy_lines.append(
+            f"- Predicted critical error: {accuracy.get('predicted_critical_error_mm', 0):.2f} mm"
+        )
+        accuracy_lines.append(
+            f"- Predicted overall error: {accuracy.get('predicted_overall_error_mm', 0):.2f} mm"
+        )
 
-        # Run reconstruction
-        def progress_callback(p, msg):
-            progress(0.3 + 0.6 * p, desc=msg)
-
-        result = reconstructor.reconstruct_from_arrays(image_arrays, progress_callback)
-
-        if not result.get("success", False):
-            error_msg = result.get("error", "Unknown error occurred")
-            return (None, None, f"⚠️ {error_msg}", f"❌ Error: {error_msg}")
-
-        progress(0.95, desc="Preparing outputs...")
-
-        # Get floor plan image
-        floor_plan_path = result["outputs"]["floor_plan_image"]
-        floor_plan_img = Image.open(floor_plan_path)
-
-        # Get 3D plot
-        plotly_fig = result["figures"]["plotly_3d"]
-
-        # Format measurements
-        m = result["measurements"]
-        measurements_text = f"""
-### 📏 Room Measurements (Approximate)
+    return f"""
+### 📏 Measurements
 
 | Dimension | Metric | Imperial |
 |-----------|--------|----------|
-| **Width** | {m['width_m']:.2f} m | {m['width_m']*3.28:.1f} ft |
-| **Depth** | {m['depth_m']:.2f} m | {m['depth_m']*3.28:.1f} ft |
-| **Area** | {m['area_sqm']:.1f} m² | {m['area_sqft']:.0f} sq ft |
+| **Width** | {m.get('width_m', 0):.3f} m | {m.get('width_ft', 0):.3f} ft |
+| **Depth** | {m.get('depth_m', 0):.3f} m | {m.get('depth_ft', 0):.3f} ft |
+| **Area** | {m.get('area_sqm', 0):.3f} m² | {m.get('area_sqft', 0):.3f} sq ft |
+| **Perimeter** | {m.get('perimeter_m', 0):.3f} m | {(m.get('perimeter_m', 0) * 3.28084):.3f} ft |
 
----
-*⚠️ Note: These are approximate measurements based on depth estimation.*  
-*Actual dimensions may vary. For accurate measurements, use professional tools.*
+### ✅ Compliance
+- Profile: `{c.get('profile', 'n/a')}`
+- Status: `{status}`
 
-**Processing Info:**
-- Images processed: {result['num_images']}
-- 3D points generated: {result['num_points']:,}
-- Assumed room width: {room_width} m
+{calibration_line}
+{diagnostic_line}
+{chr(10).join(accuracy_lines)}
+{chr(10).join(quality_lines)}
 """
 
-        status = f"✅ Successfully processed {result['num_images']} images!"
 
-        progress(1.0, desc="Complete!")
 
-        return (floor_plan_img, plotly_fig, measurements_text, status)
+def run_pass1(
+    uploaded_files,
+    compliance_profile,
+    accurate_mode,
+    diagnostic_mode,
+    progress=gr.Progress(),
+):
+    """Pass 1: process images and generate provisional outputs."""
+    images = _collect_images(list(uploaded_files or []))
 
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        error_msg = str(e)
+    if len(images) < 2:
+        context = {
+            "status": "FAIL",
+            "error": "Upload at least 2 images.",
+            "quality_failures": [],
+            "accurate_mode": bool(accurate_mode),
+            "diagnostic_mode": bool(diagnostic_mode),
+        }
         return (
             None,
             None,
-            f"⚠️ Error during processing: {error_msg}",
-            f"❌ Error: {error_msg}",
+            "⚠️ Upload at least 2 images.",
+            "❌ Error",
+            "",
+            [],
+            None,
+            None,
+            context,
         )
+
+    reconstructor = get_reconstructor()
+
+    def progress_cb(p, msg):
+        progress(min(max(p, 0.0), 1.0), desc=msg)
+
+    result = reconstructor.reconstruct_from_arrays(
+        images,
+        progress_callback=progress_cb,
+        compliance_profile=compliance_profile,
+        accurate_mode=bool(accurate_mode),
+        diagnostic_mode=bool(diagnostic_mode),
+    )
+
+    if not result.get("success", False):
+        msg = result.get("error", "Unknown error")
+        quality = result.get("quality_gate", {})
+        failures = quality.get("failures", [])
+        failure_text = "\n".join([f"- {f}" for f in failures]) if failures else ""
+        status = result.get("status", "FAIL")
+        details = f"### ❌ {result.get('status', 'FAIL')}\n{msg}\n{failure_text}"
+        context = {
+            "status": status,
+            "error": msg,
+            "quality_failures": failures,
+            "accurate_mode": bool(accurate_mode),
+            "diagnostic_mode": bool(diagnostic_mode),
+        }
+        return (
+            None,
+            None,
+            details,
+            f"❌ {result.get('status', 'FAIL')}",
+            "",
+            [],
+            None,
+            None,
+            context,
+        )
+
+    floor_plan_img = Image.open(result["outputs"]["floor_plan_image"])
+    plotly_fig = result["figures"]["plotly_3d"]
+    status = result.get("status", "OK")
+
+    if status == "NEEDS_CALIBRATION":
+        info = (
+            "### Pass 1 Complete\n"
+            "Click two points on the provisional floor plan that correspond to a known real-world distance, "
+            "then enter that distance and run Pass 2."
+        )
+        context = {
+            "status": status,
+            "error": "",
+            "quality_failures": result.get("quality_gate", {}).get("failures", []),
+            "accurate_mode": bool(accurate_mode),
+            "diagnostic_mode": bool(diagnostic_mode),
+        }
+        return (
+            floor_plan_img,
+            plotly_fig,
+            info,
+            "🟡 NEEDS_CALIBRATION",
+            result.get("session_id", ""),
+            [],
+            None,
+            None,
+            context,
+        )
+
+    measurements = _format_measurements(result)
+    context = {
+        "status": status,
+        "error": "",
+        "quality_failures": result.get("quality_gate", {}).get("failures", []),
+        "accurate_mode": bool(accurate_mode),
+        "diagnostic_mode": bool(diagnostic_mode),
+    }
+    return (
+        floor_plan_img,
+        plotly_fig,
+        measurements,
+        f"✅ {status}",
+        "",
+        [],
+        result["outputs"].get("floor_plan_dxf"),
+        result["outputs"].get("qa_report_json"),
+        context,
+    )
+
+
+
+def add_calibration_point(evt: gr.SelectData, points_state: List[Tuple[float, float]]):
+    """Capture two click points from the floor plan image."""
+    points = list(points_state or [])
+
+    x = y = None
+    if isinstance(evt.index, (tuple, list)) and len(evt.index) >= 2:
+        x, y = float(evt.index[0]), float(evt.index[1])
+    else:
+        x = float(getattr(evt, "x", 0.0))
+        y = float(getattr(evt, "y", 0.0))
+
+    if len(points) >= 2:
+        points = []
+    points.append((x, y))
+
+    if len(points) == 1:
+        text = f"Picked point 1: ({x:.1f}, {y:.1f}). Pick point 2."
+    else:
+        text = (
+            f"Picked point 2: ({x:.1f}, {y:.1f}). "
+            "Enter known distance and click 'Pass 2: Calibrate & Finalize'."
+        )
+
+    return points, text
+
+
+
+def _build_pass2_blocked_message(pass1_context: dict) -> str:
+    """Explain why pass-2 calibration is unavailable."""
+    if not isinstance(pass1_context, dict):
+        return "⚠️ Run Pass 1 first."
+
+    status = pass1_context.get("status", "")
+    failures = pass1_context.get("quality_failures", []) or []
+    accurate_mode = bool(pass1_context.get("accurate_mode", True))
+
+    if status == "NON_COMPLIANT_QUICK_MODE" or not accurate_mode:
+        return (
+            "### ⚠️ Pass 2 Blocked\n"
+            "Pass 1 was run in quick mode. Enable **Accurate mode** and rerun Pass 1 until "
+            "status is `NEEDS_CALIBRATION`."
+        )
+
+    if status == "INSUFFICIENT_CAPTURE":
+        lines = "\n".join([f"- {f}" for f in failures]) if failures else "- Capture quality gate failed."
+        return (
+            "### ⚠️ Pass 2 Blocked\n"
+            "Pass 1 did not reach `NEEDS_CALIBRATION` because capture quality failed:\n"
+            f"{lines}\n\n"
+            "Add more overlapping photos with stronger camera translation, then rerun Pass 1."
+        )
+
+    if status and status != "NEEDS_CALIBRATION":
+        return (
+            "### ⚠️ Pass 2 Blocked\n"
+            f"Pass 1 status is `{status}`. Rerun Pass 1 and continue only when status is `NEEDS_CALIBRATION`."
+        )
+
+    return "⚠️ Run Pass 1 first."
+
+
+def run_pass2(
+    session_id,
+    known_distance,
+    known_unit,
+    points_state,
+    pass1_context,
+    progress=gr.Progress(),
+):
+    """Pass 2: finalize with known-distance calibration."""
+    if not session_id:
+        blocked_msg = _build_pass2_blocked_message(pass1_context)
+        return gr.update(), gr.update(), blocked_msg, "❌ Error", gr.update(), gr.update()
+
+    points = points_state or []
+    if len(points) != 2:
+        return (
+            gr.update(),
+            gr.update(),
+            "⚠️ Click exactly two calibration points.",
+            "❌ Error",
+            gr.update(),
+            gr.update(),
+        )
+
+    if known_distance is None or known_distance <= 0:
+        return (
+            gr.update(),
+            gr.update(),
+            "⚠️ Enter a positive known distance.",
+            "❌ Error",
+            gr.update(),
+            gr.update(),
+        )
+
+    reconstructor = get_reconstructor()
+
+    def progress_cb(p, msg):
+        progress(min(max(p, 0.0), 1.0), desc=msg)
+
+    result = reconstructor.finalize_with_calibration(
+        session_id,
+        {
+            "point1_px": points[0],
+            "point2_px": points[1],
+            "known_distance": float(known_distance),
+            "known_distance_unit": known_unit,
+        },
+        progress_callback=progress_cb,
+    )
+
+    if not result.get("success", False):
+        msg = result.get("error", "Calibration failed")
+        if "Calibration session not found or expired" in msg:
+            msg = (
+                f"{msg}\n\n"
+                "Run Pass 1 again (without restarting the app) to create a fresh calibration session."
+            )
+        return (
+            gr.update(),
+            gr.update(),
+            f"### ❌ Calibration Failed\n{msg}",
+            "❌ FAIL",
+            gr.update(),
+            gr.update(),
+        )
+
+    floor_plan_img = Image.open(result["outputs"]["floor_plan_image"])
+    plotly_fig = result["figures"]["plotly_3d"]
+    measurements = _format_measurements(result)
+
+    return (
+        floor_plan_img,
+        plotly_fig,
+        measurements,
+        f"✅ {result.get('status', 'PASS')}",
+        result["outputs"].get("floor_plan_dxf"),
+        result["outputs"].get("qa_report_json"),
+    )
+
 
 
 def create_demo_interface():
-    """Create the Gradio interface."""
-
-    # Custom CSS for better styling
-    custom_css = """
-    .title-text {
-        text-align: center;
-        margin-bottom: 10px;
-    }
-    .info-box {
-        background-color: #f0f8ff;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid #3399ff;
-    }
-    """
-
-    with gr.Blocks(title="🏠 Room Reconstruction Demo") as demo:
-        # Header
+    """Create Gradio UI."""
+    with gr.Blocks(title="Room Reconstruction - Accurate 2D Floor Plan") as demo:
         gr.Markdown(
             """
-        # 🏠 Room Reconstruction from Photos
-        
-        **Transform photos of a room into 2D floor plans and interactive 3D models!**
-        
-        This demo uses AI-powered depth estimation to analyze room photographs and generate:
-        - 📐 2D Floor Plan with approximate dimensions
-        - 🎮 Interactive 3D Model visualization
-        - 📏 Room measurements (width, depth, area)
-        """
+# 🏠 Reconstruction-Grade 2D Floor Plan (Single-Room)
+
+This interface supports a **two-pass calibrated workflow**:
+1. **Pass 1**: Build provisional geometry and quality-check capture.
+2. **Pass 2**: Click two known points, enter measured distance, finalize calibrated outputs.
+
+Outputs include **PNG + DXF + QA JSON** when compliant.
+"""
         )
 
-        # Instructions
-        with gr.Accordion("📖 How to Use (Click to expand)", open=False):
-            gr.Markdown(
-                """
-            ### Getting Best Results
-            
-            1. **Upload 4-5 photos** of the same room from different angles
-            2. **Take photos from corners** - aim to capture walls and floor
-            3. **Good lighting** helps the AI understand depth better
-            4. **Avoid clutter** if possible - cleaner rooms give better results
-            5. **Set room width** - if you know the actual width, enter it for better scale
-            
-            ### Photo Tips
-            - Stand in corners and photograph towards the center
-            - Include the floor and at least 2 walls in each shot
-            - Avoid extreme wide-angle lens distortion
-            - Natural lighting works best
-            
-            ### Limitations
-            - Measurements are **approximate estimates**
-            - Works best with rectangular rooms
-            - May struggle with very cluttered or dark rooms
-            - Not suitable for professional/legal measurements
-            """
-            )
-
         with gr.Row():
-            # Left column: Image uploads
             with gr.Column(scale=1):
-                gr.Markdown("### 📷 Upload Room Photos (2-5 images)")
+                gr.Markdown("### 📷 Upload Photos (8-12 recommended for accurate mode)")
+                photo_files = gr.Files(
+                    label="Room Photos (bulk upload supported)",
+                    file_count="multiple",
+                    file_types=["image"],
+                    type="filepath",
+                )
 
-                with gr.Row():
-                    img1 = gr.Image(label="Photo 1", type="numpy", height=150)
-                    img2 = gr.Image(label="Photo 2", type="numpy", height=150)
+                compliance_profile = gr.Dropdown(
+                    choices=["us_residential_v1", "commercial_boma_v1", "global_ipms_v1"],
+                    value=DEFAULT_COMPLIANCE_PROFILE,
+                    label="Compliance Profile",
+                )
+                accurate_mode = gr.Checkbox(
+                    value=True,
+                    label="Accurate mode (fail-closed quality gates)",
+                )
+                diagnostic_mode = gr.Checkbox(
+                    value=False,
+                    label="Diagnostic mode (relax registration gate only, testing)",
+                )
 
-                with gr.Row():
-                    img3 = gr.Image(
-                        label="Photo 3 (optional)", type="numpy", height=150
-                    )
-                    img4 = gr.Image(
-                        label="Photo 4 (optional)", type="numpy", height=150
-                    )
+                pass1_btn = gr.Button("Pass 1: Analyze & Build Provisional Plan", variant="primary")
 
-                with gr.Row():
-                    img5 = gr.Image(
-                        label="Photo 5 (optional)", type="numpy", height=150
-                    )
-
-                    with gr.Column():
-                        room_width = gr.Slider(
-                            minimum=2.0,
-                            maximum=10.0,
-                            value=4.0,
-                            step=0.5,
-                            label="Assumed Room Width (meters)",
-                            info="Estimate the actual width for better scaling",
-                        )
-
-                        process_btn = gr.Button(
-                            "🚀 Generate Floor Plan & 3D Model",
-                            variant="primary",
-                            size="lg",
-                        )
+                gr.Markdown("### 📐 Pass 2 Calibration")
+                known_distance = gr.Number(label="Known Distance", value=1.0, precision=3)
+                known_unit = gr.Dropdown(
+                    choices=["m", "ft", "in"],
+                    value="m",
+                    label="Distance Unit",
+                )
+                calibration_text = gr.Markdown("Click two points on the floor plan image after Pass 1.")
+                pass2_btn = gr.Button("Pass 2: Calibrate & Finalize", variant="secondary")
 
                 status_text = gr.Textbox(label="Status", interactive=False)
+                session_id = gr.Textbox(label="Session ID", interactive=False)
+                point_state = gr.State([])
+                pass1_context_state = gr.State(
+                    {
+                        "status": "IDLE",
+                        "error": "",
+                        "quality_failures": [],
+                        "accurate_mode": True,
+                        "diagnostic_mode": False,
+                    }
+                )
 
-            # Right column: Results
             with gr.Column(scale=1):
-                gr.Markdown("### 📊 Results")
+                gr.Markdown("### 📊 Outputs")
+                floor_plan_output = gr.Image(label="2D Floor Plan", type="pil", height=420)
+                model_3d_output = gr.Plot(label="3D Reconstruction")
+                measurements_output = gr.Markdown(value="Run Pass 1 to begin.")
+                dxf_output = gr.File(label="DXF Output")
+                qa_output = gr.File(label="QA Report JSON")
 
-                with gr.Tabs():
-                    with gr.TabItem("📐 Floor Plan"):
-                        floor_plan_output = gr.Image(
-                            label="2D Floor Plan", type="pil", height=400
-                        )
-
-                    with gr.TabItem("🎮 3D Model"):
-                        model_3d_output = gr.Plot(label="Interactive 3D Model")
-
-                    with gr.TabItem("📏 Measurements"):
-                        measurements_output = gr.Markdown(
-                            value="*Upload images and click 'Generate' to see measurements*"
-                        )
-
-        # Connect the button
-        process_btn.click(
-            fn=process_images,
-            inputs=[img1, img2, img3, img4, img5, room_width],
+        pass1_btn.click(
+            fn=run_pass1,
+            inputs=[
+                photo_files,
+                compliance_profile,
+                accurate_mode,
+                diagnostic_mode,
+            ],
             outputs=[
                 floor_plan_output,
                 model_3d_output,
                 measurements_output,
                 status_text,
+                session_id,
+                point_state,
+                dxf_output,
+                qa_output,
+                pass1_context_state,
             ],
         )
 
-        # Footer
+        floor_plan_output.select(
+            fn=add_calibration_point,
+            inputs=[point_state],
+            outputs=[point_state, calibration_text],
+        )
+
+        pass2_btn.click(
+            fn=run_pass2,
+            inputs=[session_id, known_distance, known_unit, point_state, pass1_context_state],
+            outputs=[
+                floor_plan_output,
+                model_3d_output,
+                measurements_output,
+                status_text,
+                dxf_output,
+                qa_output,
+            ],
+        )
+
         gr.Markdown(
             """
-        ---
-        
-        ### 🔧 Technical Details
-        
-        This demo uses:
-        - **DPT (Dense Prediction Transformer)** for monocular depth estimation
-        - **Open3D** for 3D point cloud processing
-        - **Plotly** for interactive 3D visualization
-        - **Gradio** for the web interface
-        
-        **Disclaimer:** This is a proof-of-concept demonstration. Measurements are approximate 
-        and should not be used for construction, legal, or professional purposes.
-        
-        ---
-        *Built for home renovation industry proof-of-concept*
-        """
+---
+**Notes**
+- Accurate mode requires sufficient capture quality and successful SfM registration.
+- If quality checks fail, add more sharp images with better overlap.
+- Calibration requires two clicked points matching a real measured span.
+- Diagnostic mode relaxes only registration ratio to help debug capture; final status is `DIAGNOSTIC_ONLY`.
+"""
         )
 
     return demo
 
 
+
 def main():
-    """Main entry point."""
     print("\n" + "=" * 60)
     print("🏠 Room Reconstruction Demo")
     print("=" * 60)
-    print("\nStarting web interface...")
-    print("The AI model will be loaded when you first process images.")
-    print("\n")
+    print("\nStarting web interface...\n")
 
     demo = create_demo_interface()
-
-    # Launch the demo
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=False, show_error=True)
+    demo.launch(server_name="0.0.0.0", server_port=7870, share=False, show_error=True)
 
 
 if __name__ == "__main__":
