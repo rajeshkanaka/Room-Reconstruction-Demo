@@ -23,6 +23,16 @@ DEPTH_MODEL = (
 DEPTH_MODEL_FALLBACK = "Intel/dpt-large"  # Fallback model if primary fails
 DEPTH_MAX_SIZE = 518  # Depth Anything V2 optimal size (multiple of 14)
 
+# Metric Depth Settings (Phase 1 upgrade)
+ENABLE_METRIC_DEPTH = True  # Use metric depth models instead of relative depth
+METRIC_DEPTH_MODEL = (
+    "apple/DepthPro-hf"  # Primary: Apple Depth Pro (1B params, estimates focal length)
+)
+METRIC_DEPTH_MODEL_FALLBACK = (
+    "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"  # Fallback
+)
+CALIBRATION_METHOD = "auto"  # "auto", "user_reference", "none"
+
 # 3D Reconstruction Settings
 POINT_CLOUD_DENSITY = 4  # Sample every Nth pixel (higher = faster, less detail)
 DEPTH_SCALE = 0.5  # Scale factor for depth values
