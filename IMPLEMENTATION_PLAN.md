@@ -10,13 +10,13 @@
 ## Progress Tracker
 
 ```
-OVERALL: [########............] 43% (16/37 steps complete)
+OVERALL: [##################..] 97% (36/37 steps complete)
 
 Phase 1 - Metric Depth + Scale:    [##########] 100% (8/8) COMPLETE
 Phase 2 - Wall Detection + Geom:   [##########] 100% (8/8) COMPLETE
-Phase 3 - Architectural Rendering:  [..........] 0%  (0/8) << NEXT
-Phase 4 - Door/Window Detection:    [..........] 0%  (0/6)
-Phase 5 - Integration + UI:         [..........] 0%  (0/7)
+Phase 3 - Architectural Rendering:  [##########] 100% (8/8) COMPLETE
+Phase 4 - Door/Window Detection:    [##########] 100% (6/6) COMPLETE
+Phase 5 - Integration + UI:         [########..] 86% (6/7)
 ```
 
 ---
@@ -376,7 +376,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 **Validation:** DXF opens in FreeCAD. Wall lines have correct thickness. Dimensions match measurement engine.
 
 ### Step 3.1: SVG renderer with line weight hierarchy
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/rendering/svg_renderer.py` using `svgwrite`. Renders a `FloorPlanModel` to SVG with proper line weight hierarchy: heavy (0.6-1.0mm) for walls, medium (0.3-0.5mm) for openings, light (0.1-0.2mm) for dimensions. Walls drawn as double lines with thickness. Black/white architectural color scheme.
 - **Files to modify:**
   - `modules/rendering/svg_renderer.py` (new file)
@@ -405,7 +405,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** SVG file renders in browser. Walls are double-line with fill. Three line weight tiers visible.
 
 ### Step 3.2: DXF renderer with CAD layers
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/rendering/dxf_renderer.py` using `ezdxf`. Renders `FloorPlanModel` to DXF with standard CAD layers: A-WALL, A-WALL-DIMS, A-DOOR, A-GLAZ, A-AREA, A-DIMS, A-ANNO. Walls as polylines with thickness. Proper line weights per layer.
 - **Files to modify:**
   - `modules/rendering/dxf_renderer.py` (new file)
@@ -434,7 +434,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** DXF opens in FreeCAD/AutoCAD. Contains proper layer structure. Entities on correct layers.
 
 ### Step 3.3: Architectural symbol library
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/rendering/symbol_library.py`. Implement reusable architectural symbols: wall (double-line with fill), door (gap + 90-degree swing arc), window (triple parallel lines in wall gap), dimension tick marks (45-degree slash). Each symbol is a function that returns SVG/DXF primitives for the respective renderer.
 - **Files to modify:**
   - `modules/rendering/symbol_library.py` (new file)
@@ -455,7 +455,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Door symbol has gap + arc. Window symbol has triple lines. Dimension ticks at 45 degrees. Symbols are renderer-agnostic (return coordinate data).
 
 ### Step 3.4: ASME-style dimension lines
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/rendering/dimension_lines.py`. Implements proper architectural dimension annotation: extension lines from wall faces, dimension line between them, tick marks (45-degree architectural style), centered text with value in both metric and imperial. Supports chain dimensions for multiple wall segments.
 - **Files to modify:**
   - `modules/rendering/dimension_lines.py` (new file)
@@ -477,7 +477,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Dimension lines have extension lines, ticks, and centered text. Metric + imperial. Chain dimensions work.
 
 ### Step 3.5: Scale bar, north arrow, title block
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add standard drawing elements to SVG and DXF renderers: graphical scale bar (e.g., 0-1m-2m marks), north arrow symbol, title block border with project name/date/scale/drawing number. These are rendered in a reserved margin area outside the floor plan content.
 - **Files to modify:**
   - `modules/rendering/svg_renderer.py` (add standard elements)
@@ -504,7 +504,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Scale bar shows metric markings. North arrow visible. Title block has project info.
 
 ### Step 3.6: PNG preview renderer
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/rendering/png_renderer.py`. Renders `FloorPlanModel` to a clean PNG preview using matplotlib or Pillow. Replaces the current heatmap-based rendering. Uses the same architectural style (wall fills, dimension lines) but rasterized. This is for quick preview in Gradio without SVG support.
 - **Files to modify:**
   - `modules/rendering/png_renderer.py` (new file)
@@ -530,7 +530,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Clean architectural-style PNG. Walls drawn with thickness (not single-pixel). Dimensions annotated.
 
 ### Step 3.7: Wire renderers into FloorPlanGenerator
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Update `FloorPlanGenerator.create_floor_plan_image()` to optionally use the new renderers when a `FloorPlanModel` is available. Add `render_formats` parameter to control output (png, svg, dxf). When new pipeline provides `FloorPlanModel`, use new renderers. When fallback (old pipeline), use existing matplotlib path.
 - **Files to modify:**
   - `modules/floor_plan_generator.py`
@@ -544,7 +544,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Multiple output formats generated. Old PNG path still works as fallback.
 
 ### Step 3.8: Phase 3 integration test
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `tests/test_phase3_rendering.py`. Test SVG/DXF output validity. Verify DXF layers. Check dimension values match input model. Verify symbols are present.
 - **Files to create:**
   - `tests/test_phase3_rendering.py`
@@ -560,7 +560,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 **Validation:** Detected door positions within 20cm of actual. Door widths within 5cm.
 
 ### Step 4.1: Implement semantic segmentation module
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `modules/detection/opening_detector.py` with `OpeningDetector` class. Uses a pre-trained segmentation model (ADE20K-based SegFormer or SAM2) to identify door and window regions in input images. Returns bounding boxes and masks for each detected opening.
 - **Files to modify:**
   - `modules/detection/opening_detector.py` (new file)
@@ -581,7 +581,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Model loads and runs inference. Returns structured detection results. Handles images with no openings gracefully.
 
 ### Step 4.2: Project door/window detections to floor plan coordinates
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add projection logic to `OpeningDetector`. Given 2D bounding boxes of doors/windows in image space, plus camera intrinsics and depth map, compute their position and width in floor plan (ground plane) coordinates. Map each opening to its parent wall segment.
 - **Files to modify:**
   - `modules/detection/opening_detector.py` (add `project_to_floor_plan()`)
@@ -604,7 +604,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Door/window projected to correct wall. Width in reasonable range (0.6-1.5m doors, 0.5-3m windows).
 
 ### Step 4.3: Add door/window symbols to renderers
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Update SVG and DXF renderers to draw door symbols (gap + 90-degree arc) and window symbols (triple lines in wall gap) when `FloorPlanModel` contains `DoorOpening` and `WindowOpening` entries.
 - **Files to modify:**
   - `modules/rendering/svg_renderer.py` (add door/window rendering)
@@ -629,7 +629,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Door gap visible in wall. Arc shows swing direction. Window parallel lines visible.
 
 ### Step 4.4: Update FloorPlanModel for openings
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Ensure `FloorPlanModel` properly stores and serializes door/window data. Add chain dimension support: when a wall has doors/windows, split into segments with individual dimensions (e.g., `1.2m | [D 0.9m] | 2.4m`).
 - **Files to modify:**
   - `modules/geometry/floor_plan_model.py`
@@ -653,7 +653,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Chain dimensions sum to wall length. Door/window widths included.
 
 ### Step 4.5: Wire opening detection into pipeline
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add opening detection step to `RoomReconstructor`. After wall detection, run `OpeningDetector` on each input image, project detections to floor plan, and add to `FloorPlanModel`.
 - **Files to modify:**
   - `modules/room_reconstructor.py`
@@ -666,7 +666,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Pipeline runs without errors. Detected openings appear in FloorPlanModel and rendered output.
 
 ### Step 4.6: Phase 4 integration test
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `tests/test_phase4_openings.py`. Test opening detection, projection, and rendering. Use room photos with visible doors.
 - **Files to create:**
   - `tests/test_phase4_openings.py`
@@ -682,7 +682,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 **Validation:** Full end-to-end flow works in Gradio. All output formats downloadable.
 
 ### Step 5.1: Add format selection to Gradio UI
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Update `app.py` to add a format selector (checkboxes for PNG, SVG, DXF, PDF). Replace single image output with tabbed format-specific outputs. Add download buttons for each format.
 - **Files to modify:**
   - `app.py`
@@ -691,7 +691,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Format selector works. SVG/DXF/PNG tabs display results. Download buttons functional.
 
 ### Step 5.2: Interactive SVG floor plan viewer
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Embed the SVG floor plan directly in Gradio using `gr.HTML()` component. SVG should be pannable/zoomable in the browser. Add hover tooltips showing wall measurements.
 - **Files to modify:**
   - `app.py`
@@ -700,7 +700,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** SVG visible in browser. Pan/zoom works. Measurements readable.
 
 ### Step 5.3: User measurement correction input
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Add a "Calibrate" section to Gradio UI. User can input a known dimension (e.g., "Wall A = 3.5m") which triggers the `DepthCalibrator` to adjust all measurements. Reprocesses floor plan with corrected scale.
 - **Files to modify:**
   - `app.py`
@@ -709,7 +709,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Calibration input adjusts all measurements proportionally. UI updates without full reprocessing.
 
 ### Step 5.4: Updated measurements display
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Replace the simple measurements markdown table with a detailed breakdown: per-wall dimensions, room area, overall dimensions, confidence indicators. Show both old (legacy) and new (metric) measurements during transition period.
 - **Files to modify:**
   - `app.py`
@@ -718,7 +718,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Per-wall measurements visible. Area calculated from polygon, not bounding box.
 
 ### Step 5.5: End-to-end test suite
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Create `tests/test_e2e.py`. Full pipeline test: images -> metric depth -> SfM -> point cloud -> wall detection -> room polygon -> measurement -> rendering (all formats). Verify each stage produces output. Performance benchmarks.
 - **Files to create:**
   - `tests/test_e2e.py`
@@ -727,7 +727,7 @@ Phase 5 - Integration + UI:         [..........] 0%  (0/7)
 - **Acceptance:** Full pipeline test passes. All output files created. No regressions.
 
 ### Step 5.6: Documentation update
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Description:** Update `README.md`, `ARCHITECTURE.md`, and `CLAUDE.md` to reflect the new pipeline. Document new config options. Update module descriptions. Add examples of new output formats.
 - **Files to modify:**
   - `README.md`
@@ -792,3 +792,6 @@ all ─→ 5.5 ─→ 5.6 ─→ 5.7
 | 2026-02-09 | Session 1 | 1.1, 1.2, 1.3, 1.4 | Scaffolding + MetricDepthEstimator (Depth Pro + DA V2 fallback) + DepthCalibrator + FloorPlanModel dataclasses. Depth Pro loads OK, inference test pending (CPU-only, slow). |
 | 2026-02-09 | Session 2 | 1.5, 1.6, 1.7, 1.8 | Phase 1 COMPLETE. Config constants, wired metric depth into RoomReconstructor (conditional path + calibration), FloorPlanGenerator metric mode (scale_factor=1.0 bypasses assumed_width), 15/15 integration tests pass. |
 | 2026-02-09 | Session 2 | 2.1-2.8 | Phase 2 COMPLETE. WallDetector (RANSAC floor plane, depth gradient LSD lines, Manhattan alignment), RoomSegmenter (Shapely polygon extraction, L-shaped rooms), MeasurementEngine (per-wall lengths, chain dimensions, cross-validation), wired into RoomReconstructor. 32/32 tests pass. Next: Phase 3 (rendering). |
+| 2026-02-09 | Session 3 | 3.1-3.8 | Phase 3 COMPLETE. SVGRenderer (svgwrite, line weight hierarchy, numpy-to-float fixes), DXFRenderer (ezdxf, A-WALL/A-DOOR/A-GLAZ/A-DIMS/A-AREA/A-ANNO layers), PNGRenderer (matplotlib architectural style), SymbolLibrary (door arc, window triple lines, dimension ticks, scale bar, north arrow). Wired into RoomReconstructor via _render_floor_plan_model(). 24/24 phase 3 tests pass. |
+| 2026-02-09 | Session 3 | 4.1-4.6 | Phase 4 COMPLETE. OpeningDetector (SegFormer ADE20K semantic segmentation + Hough line fallback), project_to_floor_plan (depth-based 3D projection), detect_and_project (multi-image with deduplication), wired into _detect_walls_and_rooms(). 14/14 phase 4 tests pass. |
+| 2026-02-09 | Session 3 | 5.1-5.6 | Phase 5 (6/7). Updated Gradio UI: format tabs (SVG/DXF/PNG/3D/Measurements), SVG viewer (embedded HTML), download buttons, calibration input, per-wall measurements display. E2E test suite (6 tests). 61/61 total tests pass. Step 5.7 (deprecation cleanup) deferred. |

@@ -21,6 +21,10 @@ trimesh>=4.0.0
 pycolmap>=0.6.0
 shapely>=2.0
 
+# Rendering
+svgwrite>=1.4
+ezdxf>=1.0
+
 # Visualization
 matplotlib>=3.7.0
 plotly>=5.15.0

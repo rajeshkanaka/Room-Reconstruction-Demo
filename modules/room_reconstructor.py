@@ -44,8 +44,25 @@ from config import (
 from modules.depth_estimator import DepthEstimator
 from modules.floor_plan_generator import FloorPlanGenerator
 from modules.visualizer_3d import Visualizer3D
-from modules.sfm_processor import SfMProcessor
-from modules.dense_reconstructor import DenseReconstructor
+
+# Lazy-import SfM/COLMAP modules to avoid pycolmap native crashes on some platforms
+SfMProcessor = None
+DenseReconstructor = None
+
+
+def _load_sfm_modules():
+    """Load SfM modules on demand (pycolmap may crash on import)."""
+    global SfMProcessor, DenseReconstructor
+    if SfMProcessor is not None:
+        return
+    try:
+        from modules.sfm_processor import SfMProcessor as _SfM
+        from modules.dense_reconstructor import DenseReconstructor as _Dense
+
+        SfMProcessor = _SfM
+        DenseReconstructor = _Dense
+    except Exception:
+        pass
 
 
 class RoomReconstructor:
@@ -93,8 +110,12 @@ class RoomReconstructor:
         self.depth_estimator = DepthEstimator()
         self.floor_plan_gen = FloorPlanGenerator(assumed_width=assumed_room_width)
         self.visualizer = Visualizer3D()
-        self.sfm_processor = SfMProcessor()
-        self.dense_reconstructor = DenseReconstructor()
+        # SfM/COLMAP modules (lazy-loaded to avoid pycolmap native crashes)
+        _load_sfm_modules()
+        self.sfm_processor = SfMProcessor() if SfMProcessor is not None else None
+        self.dense_reconstructor = (
+            DenseReconstructor() if DenseReconstructor is not None else None
+        )
 
         # Calibrator for metric depth refinement
         self.depth_calibrator = None
@@ -112,9 +133,25 @@ class RoomReconstructor:
         self.room_segmenter = RoomSegmenter()
         self.measurement_engine = MeasurementEngine()
 
+        # Opening detection (door/window)
+        self.opening_detector = None
+        try:
+            from modules.detection.opening_detector import OpeningDetector
+
+            self.opening_detector = OpeningDetector()
+        except Exception as e:
+            print(
+                colored(
+                    f"[RoomReconstructor] Opening detector unavailable: {e}",
+                    "yellow",
+                )
+            )
+
         self.assumed_room_width = assumed_room_width
         self.last_result = None
-        self.use_sfm = ENABLE_SFM and self.sfm_processor.enabled
+        self.use_sfm = (
+            ENABLE_SFM and self.sfm_processor is not None and self.sfm_processor.enabled
+        )
         self.use_tsdf = True  # Use TSDF fusion when SfM poses are available
 
         if self.use_sfm:
@@ -563,16 +600,42 @@ class RoomReconstructor:
             # 5. Convert to WallSegments
             wall_segments = self.room_segmenter.segments_to_wall_segments(aligned)
 
-            # 6. Build FloorPlanModel
-            model = FloorPlanModel(walls=wall_segments, rooms=rooms)
+            # 6. Detect doors and windows
+            doors = []
+            windows = []
+            if self.opening_detector is not None:
+                try:
+                    fx = CAMERA_FX
+                    if (
+                        self.use_metric_depth
+                        and self.metric_depth_estimator is not None
+                    ):
+                        fx = self.metric_depth_estimator.get_focal_length(
+                            images[0].shape[1] if images else 640
+                        )
+                    doors, windows = self.opening_detector.detect_and_project(
+                        images, depth_maps, wall_segments, fx=fx, fy=fx
+                    )
+                except Exception as e:
+                    print(
+                        colored(
+                            f"[RoomReconstructor] Opening detection failed: {e}",
+                            "yellow",
+                        )
+                    )
 
-            # 7. Compute measurements
+            # 7. Build FloorPlanModel
+            model = FloorPlanModel(
+                walls=wall_segments, rooms=rooms, doors=doors, windows=windows
+            )
+
+            # 8. Compute measurements
             measurements = self.measurement_engine.compute_measurements(model)
 
             print(
                 colored(
                     f"[RoomReconstructor] New pipeline: {len(wall_segments)} walls, "
-                    f"{len(rooms)} rooms detected",
+                    f"{len(rooms)} rooms, {len(doors)} doors, {len(windows)} windows",
                     "green",
                 )
             )
@@ -590,6 +653,60 @@ class RoomReconstructor:
                 )
             )
             return None
+
+    def _render_floor_plan_model(
+        self,
+        detection_result: Dict,
+        timestamp: str,
+    ) -> Dict:
+        """
+        Render the FloorPlanModel using SVG, DXF, and PNG renderers.
+
+        Returns dict of output paths, or empty dict if rendering fails.
+        """
+        if detection_result is None:
+            return {}
+
+        model = detection_result.get("floor_plan_model")
+        if model is None:
+            return {}
+
+        outputs = {}
+        try:
+            from modules.rendering import SVGRenderer, DXFRenderer, PNGRenderer
+
+            title = "Room Floor Plan"
+
+            # SVG
+            svg_path = os.path.join(OUTPUT_DIR, f"floor_plan_{timestamp}.svg")
+            SVGRenderer().render(model, svg_path, title=title)
+            outputs["floor_plan_svg"] = svg_path
+
+            # DXF
+            dxf_path = os.path.join(OUTPUT_DIR, f"floor_plan_{timestamp}.dxf")
+            DXFRenderer().render(model, dxf_path, title=title)
+            outputs["floor_plan_dxf"] = dxf_path
+
+            # PNG (architectural style from FloorPlanModel)
+            png_path = os.path.join(OUTPUT_DIR, f"floor_plan_arch_{timestamp}.png")
+            PNGRenderer().render_to_image(model, png_path, title=title)
+            outputs["floor_plan_arch_png"] = png_path
+
+            print(
+                colored(
+                    f"[RoomReconstructor] Rendered floor plan: SVG, DXF, PNG",
+                    "green",
+                )
+            )
+        except Exception as e:
+            print(
+                colored(
+                    f"[RoomReconstructor] Floor plan rendering failed: {e}",
+                    "yellow",
+                )
+            )
+
+        return outputs
 
     def _calibrate_metric_points(self, points: np.ndarray) -> np.ndarray:
         """Apply metric depth calibration if available."""
@@ -844,6 +961,9 @@ class RoomReconstructor:
         ply_path = os.path.join(OUTPUT_DIR, f"room_pointcloud_{timestamp}.ply")
         self.visualizer.save_point_cloud(combined_points, combined_colors, ply_path)
 
+        # Render FloorPlanModel using new renderers (SVG, DXF, PNG)
+        render_outputs = self._render_floor_plan_model(detection_result, timestamp)
+
         # Try to generate mesh (optional, for better visualization)
         mesh = None
         mesh_path = None
@@ -876,6 +996,7 @@ class RoomReconstructor:
                 "html_3d_model": html_path,
                 "point_cloud_ply": ply_path,
                 "mesh_ply": mesh_path,
+                **render_outputs,
             },
             "data": {
                 "points": combined_points,
@@ -1072,6 +1193,9 @@ class RoomReconstructor:
         html_path = os.path.join(OUTPUT_DIR, f"room_3d_{timestamp}.html")
         self.visualizer.export_html(combined_points, combined_colors, html_path)
 
+        # Render FloorPlanModel using new renderers (SVG, DXF, PNG)
+        render_outputs = self._render_floor_plan_model(detection_result, timestamp)
+
         if progress_callback:
             progress_callback(1.0, "Complete!")
 
@@ -1087,6 +1211,7 @@ class RoomReconstructor:
             "outputs": {
                 "floor_plan_image": floor_plan_path,
                 "html_3d_model": html_path,
+                **render_outputs,
             },
             "figures": {
                 "floor_plan": floor_plan_fig,
