@@ -96,6 +96,9 @@ class SVGRenderer:
             size=(f"{width}px", f"{height}px"),
             viewBox=f"0 0 {width} {height}",
         )
+        quality_note = self._quality_banner_text(model)
+        if quality_note:
+            dwg.set_desc(title=title, desc=quality_note)
 
         # Add a white background
         dwg.add(dwg.rect(insert=(0, 0), size=(width, height), fill="white"))
@@ -143,7 +146,7 @@ class SVGRenderer:
         dwg.add(label_group)
 
         # Title block
-        self._draw_title_block(dwg, title, width, height, model.scale)
+        self._draw_title_block(dwg, title, width, height, model)
 
         # Scale bar
         self._draw_scale_indicator(dwg, width, height)
@@ -218,8 +221,7 @@ class SVGRenderer:
         )
 
     def _draw_door(self, dwg, group, door, model):
-        """Draw door symbol (gap + arc)."""
-        # Find parent wall
+        """Draw door symbol (gap + arc, or sliding lines)."""
         parent_wall = self._find_parent_wall(door.position, model.walls)
         if parent_wall is None:
             return
@@ -229,6 +231,25 @@ class SVGRenderer:
         if wall_length < 1e-6:
             return
         wall_unit = wall_dir / wall_length
+
+        # Use sliding door symbol for sliding doors
+        door_type = getattr(door, "door_type", "single")
+        if door_type == "sliding":
+            symbol = self.symbols.sliding_door_symbol(
+                door.position, door.width, wall_unit
+            )
+            for line_start, line_end in symbol["lines"]:
+                s = self._to_svg(line_start[0], line_start[1])
+                e = self._to_svg(line_end[0], line_end[1])
+                group.add(
+                    dwg.line(
+                        start=s,
+                        end=e,
+                        stroke=self.WALL_COLOR,
+                        stroke_width=self.OPENING_WEIGHT,
+                    )
+                )
+            return
 
         symbol = self.symbols.door_symbol(
             door.position, door.width, wall_unit, door.swing_direction
@@ -404,7 +425,7 @@ class SVGRenderer:
             )
         )
 
-    def _draw_title_block(self, dwg, title, width, height, scale):
+    def _draw_title_block(self, dwg, title, width, height, model):
         """Draw title block at bottom of drawing."""
         y = height - 30
         dwg.add(
@@ -427,13 +448,38 @@ class SVGRenderer:
         )
         dwg.add(
             dwg.text(
-                f"Scale 1:{int(scale)}",
+                f"Scale 1:{int(model.scale)}",
                 insert=(width - 100, y + 10),
                 font_size="10px",
                 font_family="Arial, sans-serif",
                 fill="#666",
             )
         )
+        quality_text = self._quality_banner_text(model)
+        if quality_text:
+            is_warning = getattr(model, "export_policy", "") != "normal_export"
+            dwg.add(
+                dwg.text(
+                    quality_text,
+                    insert=(15, y + 24),
+                    font_size="10px",
+                    font_family="Arial, sans-serif",
+                    fill="#b00000" if is_warning else "#2e7d32",
+                )
+            )
+
+    @staticmethod
+    def _quality_banner_text(model: FloorPlanModel) -> str:
+        """Build a concise quality/export status note for annotations/metadata."""
+        policy = str(getattr(model, "export_policy", "") or "").lower()
+        mode = str(getattr(model, "quality_mode", "") or "").lower()
+        if policy == "needs_more_images" or mode == "needs_more_images":
+            return "QUALITY: NEEDS MORE IMAGES - DRAFT ONLY"
+        if policy == "annotate_as_approximate" or mode == "approximate":
+            return "QUALITY: APPROXIMATE - NOT FOR CONSTRUCTION"
+        if policy == "normal_export" or mode == "high_confidence":
+            return "QUALITY: HIGH CONFIDENCE"
+        return ""
 
     def _draw_scale_indicator(self, dwg, width, height):
         """Draw a simple scale indicator."""

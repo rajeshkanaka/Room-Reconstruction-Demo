@@ -106,6 +106,19 @@ class PNGRenderer:
             fontsize=8,
             color="#666",
         )
+        quality_text = self._quality_banner_text(model)
+        if quality_text:
+            is_warning = getattr(model, "export_policy", "") != "normal_export"
+            ax.text(
+                0.02,
+                0.02,
+                quality_text,
+                transform=ax.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize=8,
+                color="#b00000" if is_warning else "#2e7d32",
+            )
 
         # Clean up axes
         ax.grid(False)
@@ -150,6 +163,19 @@ class PNGRenderer:
             float(pts[:, 0].max()),
             float(pts[:, 1].max()),
         )
+
+    @staticmethod
+    def _quality_banner_text(model: FloorPlanModel) -> str:
+        """Build concise export-quality annotation for preview PNG."""
+        policy = str(getattr(model, "export_policy", "") or "").lower()
+        mode = str(getattr(model, "quality_mode", "") or "").lower()
+        if policy == "needs_more_images" or mode == "needs_more_images":
+            return "QUALITY: NEEDS MORE IMAGES - DRAFT ONLY"
+        if policy == "annotate_as_approximate" or mode == "approximate":
+            return "QUALITY: APPROXIMATE - NOT FOR CONSTRUCTION"
+        if policy == "normal_export" or mode == "high_confidence":
+            return "QUALITY: HIGH CONFIDENCE"
+        return ""
 
     def _draw_room_fill(self, ax, room):
         """Draw room polygon fill."""
@@ -198,7 +224,7 @@ class PNGRenderer:
         ax.add_patch(poly)
 
     def _draw_door(self, ax, door, model):
-        """Draw door symbol (arc)."""
+        """Draw door symbol (arc, or sliding lines)."""
         parent_wall = self._find_parent_wall(door.position, model.walls)
         if parent_wall is None:
             return
@@ -208,6 +234,21 @@ class PNGRenderer:
         if wall_length < 1e-6:
             return
         wall_unit = wall_dir / wall_length
+
+        # Use sliding door symbol for sliding doors
+        door_type = getattr(door, "door_type", "single")
+        if door_type == "sliding":
+            symbol = self.symbols.sliding_door_symbol(
+                door.position, door.width, wall_unit
+            )
+            for line_start, line_end in symbol["lines"]:
+                ax.plot(
+                    [float(line_start[0]), float(line_end[0])],
+                    [float(line_start[1]), float(line_end[1])],
+                    color=self.DOOR_COLOR,
+                    linewidth=1.5,
+                )
+            return
 
         symbol = self.symbols.door_symbol(
             door.position, door.width, wall_unit, door.swing_direction

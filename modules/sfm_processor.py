@@ -329,7 +329,7 @@ class SfMProcessor:
                 "cy": camera.principal_point_y,
                 "width": camera.width,
                 "height": camera.height,
-                "model": camera.model_name,
+                "model": camera.model.name,
             }
 
         # Extract sparse 3D points

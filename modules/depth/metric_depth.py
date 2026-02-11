@@ -9,6 +9,7 @@ Unlike the relative depth estimator, output values are absolute distances
 in meters, eliminating the need for assumed_room_width scaling.
 """
 
+import os
 import numpy as np
 import torch
 from PIL import Image
@@ -67,12 +68,19 @@ class MetricDepthEstimator:
 
         raise RuntimeError("Failed to load any metric depth model")
 
+    @staticmethod
+    def _hf_token():
+        return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
     def _load_depth_pro(self, model_id: str):
         """Load Apple Depth Pro via HuggingFace Transformers."""
         from transformers import DepthProImageProcessorFast, DepthProForDepthEstimation
 
-        self.processor = DepthProImageProcessorFast.from_pretrained(model_id)
-        self.model = DepthProForDepthEstimation.from_pretrained(model_id)
+        token = self._hf_token()
+        self.processor = DepthProImageProcessorFast.from_pretrained(
+            model_id, token=token
+        )
+        self.model = DepthProForDepthEstimation.from_pretrained(model_id, token=token)
         self.model.to(self.device)
         self.model.eval()
         self.model_type = "depth_pro"
@@ -81,8 +89,9 @@ class MetricDepthEstimator:
         """Load Depth Anything V2 Metric Indoor via HuggingFace Transformers."""
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
-        self.processor = AutoImageProcessor.from_pretrained(model_id)
-        self.model = AutoModelForDepthEstimation.from_pretrained(model_id)
+        token = self._hf_token()
+        self.processor = AutoImageProcessor.from_pretrained(model_id, token=token)
+        self.model = AutoModelForDepthEstimation.from_pretrained(model_id, token=token)
         self.model.to(self.device)
         self.model.eval()
         self.model_type = "da_v2_metric"

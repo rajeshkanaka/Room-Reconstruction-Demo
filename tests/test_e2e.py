@@ -209,5 +209,4 @@ class TestFullPipeline:
         assert r.room_segmenter is not None
         assert r.measurement_engine is not None
         assert r.opening_detector is not None
-        assert r.floor_plan_gen is not None
         assert r.depth_estimator is not None

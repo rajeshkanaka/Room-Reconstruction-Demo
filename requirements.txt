@@ -35,3 +35,10 @@ gradio>=4.0.0
 # Utilities
 tqdm>=4.65.0
 termcolor>=2.3.0
+
+# VGGT (Visual Geometry Grounded Transformer)
+# Installed from local clone: uv pip install -e ../vggt
+# Requires: torch, torchvision (already above)
+
+# Gemini 3 via Vertex AI
+google-genai>=1.0.0

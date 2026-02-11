@@ -1,0 +1,17 @@
+{
+  "case_id": "sample_images_9_jpegs",
+  "description": "Regression benchmark for the current 9-image Missoula sample room.",
+  "sample_glob": "sample_images/*.jpeg",
+  "acceptance": {
+    "min_images": 9,
+    "min_wall_count": 4,
+    "min_closure_score": 0.8,
+    "allowed_quality_modes": [
+      "high_confidence",
+      "approximate",
+      "needs_more_images"
+    ],
+    "require_non_industry_ready_if_fallback": true,
+    "allow_rectangular_fallback": true
+  }
+}

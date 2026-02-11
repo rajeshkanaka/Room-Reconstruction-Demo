@@ -76,3 +76,15 @@ DEPTH_FUSION_METHOD = "tsdf"  # Options: tsdf, poisson
 MESH_DEPTH = 9  # Poisson reconstruction depth (higher = more detail)
 MESH_SCALE = 1.1  # Scale for mesh bounding box
 MESH_SIMPLIFY_TARGET = 100000  # Target face count for mesh simplification
+
+# --- VGGT Settings ---
+ENABLE_VGGT = True
+VGGT_MODEL = "facebook/VGGT-1B"
+VGGT_CONFIDENCE_THRESHOLD = 0.5
+VGGT_MAX_SIZE = 518
+
+# --- Gemini Scene Analysis Settings ---
+ENABLE_GEMINI_ANALYSIS = True
+GEMINI_MODEL = "gemini-3-flash-preview"
+GEMINI_CONFIDENCE_THRESHOLD = 0.7
+GEMINI_TIMEOUT = 30  # seconds

@@ -148,15 +148,34 @@ class MeasurementEngine:
         return warnings
 
     def _generate_dimension_lines(self, model: FloorPlanModel) -> List[DimensionLine]:
-        """Generate DimensionLine objects for each wall."""
+        """Generate DimensionLine objects for each wall (prefer exterior offsets)."""
+        if not model.walls:
+            return []
+
+        all_pts = []
+        for wall in model.walls:
+            all_pts.append(wall.start)
+            all_pts.append(wall.end)
+        centroid = np.mean(np.array(all_pts), axis=0)
+
         dims = []
         for wall in model.walls:
             length = self._wall_length(wall)
+            if length < 0.5:
+                continue
+
+            wall_vec = wall.end - wall.start
+            wall_unit = wall_vec / max(length, 1e-12)
+            perp = np.array([-wall_unit[1], wall_unit[0]])
+            mid = (wall.start + wall.end) / 2
+            sign = 1.0 if np.dot(mid - centroid, perp) >= 0 else -1.0
+            offset = 0.35 * sign
+
             dim = DimensionLine(
                 start=wall.start.copy(),
                 end=wall.end.copy(),
                 value_m=length,
-                offset=0.5,
+                offset=offset,
             )
             dims.append(dim)
         return dims

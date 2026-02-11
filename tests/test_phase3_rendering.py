@@ -129,6 +129,13 @@ class TestSVGRenderer:
         svg = renderer.render_to_string(model)
         assert "<svg" in svg  # Should return valid but empty SVG
 
+    def test_svg_quality_banner_for_approximate_export(self, simple_model):
+        renderer = SVGRenderer()
+        simple_model.quality_mode = "approximate"
+        simple_model.export_policy = "annotate_as_approximate"
+        svg = renderer.render_to_string(simple_model)
+        assert "QUALITY: APPROXIMATE - NOT FOR CONSTRUCTION" in svg
+
 
 # ---------- DXF Renderer Tests ----------
 
@@ -188,6 +195,25 @@ class TestDXFRenderer:
         assert len(door_entities) > 0, "No door entities on A-DOOR layer"
         assert len(window_entities) > 0, "No window entities on A-GLAZ layer"
 
+    def test_dxf_quality_banner_for_approximate_export(self, simple_model, output_dir):
+        import ezdxf
+
+        renderer = DXFRenderer()
+        simple_model.quality_mode = "approximate"
+        simple_model.export_policy = "annotate_as_approximate"
+        path = os.path.join(output_dir, "quality_banner.dxf")
+        renderer.render(simple_model, path)
+
+        doc = ezdxf.readfile(path)
+        msp = doc.modelspace()
+        anno_texts = [
+            str(getattr(e.dxf, "text", ""))
+            for e in msp
+            if e.dxftype() == "TEXT" and e.dxf.layer == "A-ANNO"
+        ]
+        joined = " | ".join(anno_texts)
+        assert "QUALITY: APPROXIMATE - NOT FOR CONSTRUCTION" in joined
+
 
 # ---------- PNG Renderer Tests ----------
 
@@ -222,6 +248,19 @@ class TestPNGRenderer:
         model = FloorPlanModel()
         fig = renderer.render(model)
         assert fig is not None
+        plt.close(fig)
+
+    def test_png_quality_banner_for_approximate_export(self, simple_model):
+        import matplotlib.pyplot as plt
+
+        renderer = PNGRenderer()
+        simple_model.quality_mode = "approximate"
+        simple_model.export_policy = "annotate_as_approximate"
+        fig = renderer.render(simple_model)
+        texts = [t.get_text() for t in fig.axes[0].texts]
+        assert any(
+            "QUALITY: APPROXIMATE - NOT FOR CONSTRUCTION" in txt for txt in texts
+        )
         plt.close(fig)
 
 

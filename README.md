@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Metric depth estimation &bull; Wall detection &bull; Door/window recognition &bull; SVG / DXF / PNG output &bull; Interactive 3D
+  VGGT single-pass reconstruction &bull; Gemini 3 scene analysis &bull; Metric depth &bull; Wall detection &bull; Door/window recognition &bull; SVG / DXF / PNG output &bull; Interactive 3D
 </p>
 
 ---
@@ -22,35 +22,42 @@
 
 The following table evaluates every technology referenced in the [3D Room Reconstruction Deep Research](3D-Room-Reconstruction-DeepResearch.pdf) document against this implementation. Each technology is assessed for inclusion with rationale.
 
-### Depth Estimation
+### Multi-View Reconstruction (Primary)
 
 | Technology | Status | Role in This Project | Rationale |
 |:-----------|:------:|:---------------------|:----------|
-| **Apple Depth Pro** | **Used** | Primary metric depth model (`apple/DepthPro-hf`) | Produces absolute metric depth (meters) from a single image. 1B-parameter model that also estimates focal length, eliminating need for camera calibration. Best-in-class accuracy for indoor scenes. |
-| **Depth-Anything-V2 Metric Indoor** | **Used** | Metric depth fallback model | Strong indoor metric depth when Depth Pro is unavailable. Trained specifically on indoor NYU-Depth datasets. Automatic fallback mechanism ensures robustness. |
+| **VGGT (CVPR 2025 Best Paper)** | **Used** | **Primary reconstruction backend** | Visual Geometry Grounded Transformer. Single forward pass produces metric depth, camera poses, focal lengths, and aligned 3D point cloud from 2-12 images. Replaces the entire SfM + depth estimation + registration pipeline. 1B-parameter model from Meta Research. |
+| **Gemini 3 Flash (Vertex AI)** | **Used** | **Semantic scene analysis** | Google's Gemini 3 multimodal model. Analyzes room photos to classify room type, detect doors/windows, and determine room shape. Runs in parallel with VGGT via ThreadPoolExecutor -- adds zero latency to the pipeline. Structured JSON output via response schema. |
+
+### Depth Estimation (Legacy Fallback)
+
+| Technology | Status | Role in This Project | Rationale |
+|:-----------|:------:|:---------------------|:----------|
+| **Apple Depth Pro** | **Used** | Legacy metric depth model (`apple/DepthPro-hf`) | Produces absolute metric depth (meters) from a single image. 1B-parameter model that also estimates focal length. Used when VGGT is disabled. |
+| **Depth-Anything-V2 Metric Indoor** | **Used** | Metric depth fallback model | Strong indoor metric depth when Depth Pro is unavailable. Trained specifically on indoor NYU-Depth datasets. |
 | **Depth-Anything-V2 Large** | **Used** | Relative depth backbone | High-resolution relative depth for point cloud generation. Optimal at 518px (multiple of 14 for ViT). Used when metric models are disabled. |
-| **Intel DPT-Large** | **Used** | Legacy fallback depth model | Reliable fallback when primary and secondary models fail to load. Well-tested on diverse indoor scenes. Ensures the system always produces output. |
-| **MiDaS** | Not used | -- | Superseded by Depth-Anything-V2, which achieves better accuracy on indoor benchmarks. MiDaS produces only relative depth with arbitrary scale, requiring manual calibration. |
+| **Intel DPT-Large** | **Used** | Legacy fallback depth model | Reliable fallback when primary and secondary models fail to load. Well-tested on diverse indoor scenes. |
+| **MiDaS** | Not used | -- | Superseded by Depth-Anything-V2, which achieves better accuracy on indoor benchmarks. |
 
-### Structure-from-Motion & Multi-View Stereo
+### Structure-from-Motion & Multi-View Stereo (Legacy Fallback)
 
 | Technology | Status | Role in This Project | Rationale |
 |:-----------|:------:|:---------------------|:----------|
-| **COLMAP (pycolmap)** | **Used** | SfM pipeline for camera pose estimation | State-of-the-art photogrammetry toolkit. SIFT features, exhaustive matching, incremental SfM. Produces camera poses and intrinsics essential for TSDF fusion. Robust and proven. |
-| **TSDF Fusion** | **Used** | Dense volumetric fusion from SfM poses | Truncated Signed Distance Function fusion via Open3D. Produces clean, consistent point clouds when SfM poses are available. Primary fusion strategy. |
-| **ICP/RANSAC Registration** | **Used** | Fallback multi-view alignment | Legacy alignment when SfM is unavailable. RANSAC for coarse alignment, ICP for refinement. Ensures multi-view fusion even without COLMAP. |
-| **Meshroom (AliceVision)** | Not used | -- | Requires NVIDIA GPU for dense reconstruction. Heavier dependency footprint than pycolmap. The pycolmap approach provides equivalent SfM quality with lighter integration and cross-platform support. |
-| **OpenMVG + OpenMVS** | Not used | -- | Requires building from source. COLMAP via pycolmap provides the same capability with simpler pip-based installation. No added benefit for this pipeline's scope. |
+| **COLMAP (pycolmap)** | **Used** | Legacy SfM pipeline for camera pose estimation | Used when VGGT is unavailable. SIFT features, exhaustive matching, incremental SfM. Produces camera poses and intrinsics for TSDF fusion. |
+| **TSDF Fusion** | **Used** | Dense volumetric fusion from SfM poses | Truncated Signed Distance Function fusion via Open3D. Used in legacy path when COLMAP SfM succeeds. |
+| **ICP/RANSAC Registration** | **Used** | Fallback multi-view alignment | Legacy alignment when both VGGT and SfM are unavailable. RANSAC for coarse alignment, ICP for refinement. |
+| **Meshroom (AliceVision)** | Not used | -- | Requires NVIDIA GPU for dense reconstruction. VGGT supersedes the need for any SfM pipeline. |
+| **OpenMVG + OpenMVS** | Not used | -- | Requires building from source. VGGT provides superior results in a single forward pass. |
 
 ### Semantic Understanding & Detection
 
 | Technology | Status | Role in This Project | Rationale |
 |:-----------|:------:|:---------------------|:----------|
-| **SegFormer (ADE20K)** | **Used** | Door and window semantic segmentation | NVIDIA's `segformer-b2-finetuned-ade-512-512` detects doors (class 25) and windows (class 8) via pixel-level semantic segmentation. Lightweight transformer architecture suitable for real-time inference. |
-| **Hough Line Detection** | **Used** | Fallback opening detection | Classical CV fallback when SegFormer model is unavailable. Canny edge detection + HoughLinesP identifies vertical line pairs as potential door/window candidates. Zero-dependency fallback. |
-| **Wall Detection (custom)** | **Used** | Depth-based wall boundary extraction | Custom pipeline: depth gradient analysis, Canny edge detection, Hough line transforms, and Manhattan-world alignment. Purpose-built for floor plan wall extraction. |
-| **Detectron2 / Mask R-CNN** | Not used | -- | Instance segmentation is overkill for door/window detection. SegFormer's semantic segmentation is lighter and sufficient for identifying opening regions on walls. Detectron2 adds heavy dependencies (Detectron2 + COCO weights). |
-| **MIT Scene Parse** | Not used | -- | Interesting for full scene understanding but not required. SegFormer on ADE20K already covers the classes needed (doors, windows, walls). Adding another model increases latency without proportional benefit. |
+| **Gemini 3 Flash** | **Used** | Room type classification, door/window counting | Multimodal analysis of room photos. Identifies room type (bedroom, kitchen, etc.), room shape, door/window locations and types (sliding, standard, etc.). Results merged into FloorPlanModel. |
+| **SegFormer (ADE20K)** | **Used** | Door and window semantic segmentation | NVIDIA's `segformer-b2-finetuned-ade-512-512` detects doors (class 25) and windows (class 8) via pixel-level semantic segmentation. Provides pixel-precise opening boundaries. |
+| **Hough Line Detection** | **Used** | Fallback opening detection | Classical CV fallback when SegFormer model is unavailable. Canny edge detection + HoughLinesP identifies vertical line pairs as potential door/window candidates. |
+| **Wall Detection (custom)** | **Used** | Depth-based wall boundary extraction | Custom pipeline: depth gradient analysis, Canny edge detection, Hough line transforms, and Manhattan-world alignment. |
+| **Detectron2 / Mask R-CNN** | Not used | -- | Instance segmentation is overkill for door/window detection. SegFormer + Gemini already covers the required detection capabilities. |
 
 ### 3D Processing & Visualization
 
@@ -86,58 +93,57 @@ The following table evaluates every technology referenced in the [3D Room Recons
 ## How It Works
 
 ```
-                        RECONSTRUCTION PIPELINE
+                     PRIMARY PIPELINE (VGGT + Gemini)
 
   Photos (4-5)                                          Output Formats
   ============                                          ==============
 
-  +-------+      +----------+      +-----------+       +-- SVG (vector)
-  | img1  |----->|  Metric  |----->|   Wall    |       +-- DXF (CAD)
-  | img2  |      |  Depth   |      | Detection |------>+-- PNG (arch.)
-  | img3  |      | Estimate |      +-----------+       +-- 3D (Plotly)
-  | img4  |      +----------+            |             +-- PLY (mesh)
-  +-------+           |            +-----------+       +-- HTML (3D)
-       |               |           |   Room    |
-       |          +---------+      | Segmenter |
-       +--------->| COLMAP  |      +-----------+
-                  |   SfM   |            |
-                  +---------+      +-----------+
-                       |           |  Opening  |
-                  +---------+      | Detector  |
-                  |  TSDF   |      | (SegForm) |
-                  | Fusion  |      +-----------+
-                  +---------+            |
-                       |           +-----------+
-                  +---------+      | Measure   |
-                  | Filter  |      |  Engine   |
-                  | + Clean |      +-----------+
-                  +---------+            |
-                       |           +-----------+
-                       +---------->| Renderers |-------> Files
-                                   | SVG/DXF/  |
-                                   | PNG/3D    |
-                                   +-----------+
+  +-------+      +-----------+      +-----------+       +-- SVG (vector)
+  | img1  |----->|   VGGT    |----->|   Wall    |       +-- DXF (CAD)
+  | img2  |      | (single   |      | Detection |------>+-- PNG (arch.)
+  | img3  |      | forward   |      +-----------+       +-- 3D (Plotly)
+  | img4  |      | pass)     |            |             +-- PLY (mesh)
+  +-------+      +-----------+      +-----------+       +-- HTML (3D)
+       |          Returns:          |   Room    |
+       |          - metric depth    | Segmenter |
+       |          - camera poses    +-----------+
+       |          - focal lengths         |
+       |          - point cloud     +-----------+
+       |                            |  Opening  |
+       |   (parallel)               | Detector  |
+       +--------->+-----------+     +-----------+
+                  | Gemini 3  |           |
+                  | Flash     |     +-----------+
+                  | (Vertex)  |     | Measure   |
+                  +-----------+     |  Engine   |
+                   Returns:         +-----------+
+                   - room type            |
+                   - doors/windows  +-----------+
+                   - room shape     | Renderers |-------> Files
+                                    | SVG/DXF/  |
+                                    | PNG/3D    |
+                                    +-----------+
+
+  LEGACY FALLBACK (if VGGT unavailable):
+  Photos --> COLMAP SfM --> Depth Estimation --> TSDF/ICP Fusion --> ...
 ```
 
-### Stage 1: Metric Depth Estimation
+### Primary Path: VGGT Reconstruction
 
-Each photo is processed by **Apple Depth Pro** (primary) or **Depth-Anything-V2 Metric Indoor** (fallback) to produce absolute depth maps in meters. Unlike relative depth models, metric depth preserves real-world scale, enabling accurate room measurements without manual calibration.
+**VGGT** (Visual Geometry Grounded Transformer, CVPR 2025 Best Paper) processes all images in a single forward pass, producing metric depth maps, camera poses with estimated focal lengths, and an aligned 3D point cloud. This replaces the entire legacy pipeline (SfM + depth estimation + registration) with a single model.
 
-### Stage 2: Structure-from-Motion (Optional)
+### Parallel: Gemini Scene Analysis
 
-When 3+ images are provided, **COLMAP SfM** (via pycolmap) estimates camera poses through SIFT feature extraction, exhaustive matching, and incremental mapping. These poses enable geometrically consistent multi-view fusion.
+**Gemini 3 Flash** runs concurrently via ThreadPoolExecutor. It analyzes the room photos to classify room type (bedroom, kitchen, etc.), detect doors and windows with their types (sliding, standard, etc.), and determine room shape. Results are merged into the FloorPlanModel after wall detection.
 
-### Stage 3: Point Cloud Fusion
+### Legacy Fallback
 
-Depth maps are back-projected to 3D using the pinhole camera model. Three fusion strategies are attempted in order:
+When VGGT is unavailable, the system falls back to the original pipeline:
+1. **Apple Depth Pro** or **Depth-Anything-V2** for per-image depth estimation
+2. **COLMAP SfM** for camera pose estimation
+3. **TSDF Fusion** / **SfM Alignment** / **ICP/RANSAC** for point cloud fusion
 
-1. **TSDF Fusion** (best) -- volumetric fusion using SfM camera poses via Open3D
-2. **SfM-Based Alignment** -- direct transformation using SfM pose matrices
-3. **Legacy ICP/RANSAC** -- pairwise registration when SfM is unavailable
-
-Post-processing applies statistical outlier removal and voxel downsampling.
-
-### Stage 4: Wall Detection & Room Segmentation
+### Wall Detection & Room Segmentation
 
 A custom pipeline extracts architectural structure from the point cloud:
 
@@ -146,11 +152,15 @@ A custom pipeline extracts architectural structure from the point cloud:
 - **Manhattan-world alignment** snaps walls to orthogonal axes
 - **Room segmentation** extracts room polygons from wall topology
 
-### Stage 5: Door & Window Detection
+### Door & Window Detection
 
-**SegFormer** (ADE20K-finetuned) performs semantic segmentation to identify door (class 25) and window (class 8) regions. Detected bounding boxes are projected from 2D image space to 3D floor plan coordinates using depth-based back-projection. A Hough-line fallback handles cases where the model is unavailable.
+Two complementary detection sources:
+1. **Gemini 3** -- counts and classifies doors/windows from photos, identifies types (sliding, double, etc.)
+2. **SegFormer** (ADE20K-finetuned) -- pixel-level semantic segmentation for precise opening boundaries
 
-### Stage 6: Measurement & Rendering
+Detected openings from both sources are merged into the FloorPlanModel with deduplication (0.5m threshold).
+
+### Measurement & Rendering
 
 The **MeasurementEngine** computes per-wall lengths, room areas, and chain dimensions (wall-to-opening-to-wall). Three renderers produce output:
 
@@ -168,10 +178,11 @@ All renderers produce door arcs, window symbols, dimension lines, scale bars, an
 
 ### Prerequisites
 
-- **Python 3.8+** (3.10+ recommended)
+- **Python 3.11+** (3.11.10 recommended)
 - **[uv](https://docs.astral.sh/uv/)** package manager (recommended) or pip
-- 8 GB+ RAM (16 GB recommended for metric depth models)
-- GPU with CUDA support (optional, significantly accelerates inference)
+- 16 GB+ RAM (VGGT-1B is a large model)
+- GPU with CUDA or Apple MPS support (strongly recommended for VGGT)
+- **Google Cloud project** with Vertex AI enabled (for Gemini scene analysis)
 
 ### Install
 
@@ -179,24 +190,34 @@ All renderers produce door arcs, window symbols, dimension lines, scale bars, an
 git clone <repository-url>
 cd missoula
 
-# Option A: uv (recommended)
-uv sync
-# or: uv pip install -r requirements.txt
+# Install VGGT from local clone
+uv pip install -e ../vggt
 
-# Option B: pip
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+# Install remaining dependencies
+uv pip install -r requirements.txt
 ```
+
+### Environment Setup (Gemini 3)
+
+Gemini scene analysis requires Vertex AI credentials:
+
+```bash
+export GOOGLE_GENAI_USE_VERTEXAI=1
+export GOOGLE_CLOUD_LOCATION="global"
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+```
+
+Gemini is optional -- the pipeline works without it, just without semantic labels (room type, door/window classification).
 
 ### First Run -- Model Download
 
-On first execution, depth models are downloaded automatically from Hugging Face:
+On first execution, models are downloaded automatically from Hugging Face:
 
 | Model | Size | Downloaded When |
 |:------|:-----|:----------------|
-| Apple Depth Pro | ~1.5 GB | Metric depth enabled (default) |
+| **VGGT-1B** | ~4 GB | Primary reconstruction (default) |
+| Apple Depth Pro | ~1.5 GB | Legacy fallback (VGGT disabled) |
 | Depth-Anything-V2 Metric Indoor | ~1.3 GB | Depth Pro fails to load |
-| Depth-Anything-V2 Large | ~1.3 GB | Metric depth disabled |
 | Intel DPT-Large | ~350 MB | All above fail |
 | SegFormer (ADE20K) | ~100 MB | Opening detection on first image |
 
@@ -207,10 +228,10 @@ No manual download steps required. Subsequent runs use the Hugging Face cache.
 ```bash
 # Web interface (recommended)
 uv run python app.py
-# Open http://localhost:7860
+# Open http://localhost:7850
 
 # Command line
-uv run python run_cli.py sample_images/img*.jpeg --room-width 4.0
+uv run python run_cli.py sample_images/test_room_*.jpg
 uv run python run_cli.py path/to/photos/*.jpg --room-width 5.0 --visualize
 ```
 
@@ -303,26 +324,31 @@ All outputs are written to the `outputs/` directory with timestamps.
 All parameters are in `config.py`:
 
 ```python
-# Depth estimation
-DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Large-hf"
-DEPTH_MAX_SIZE = 518                     # ViT-optimal (multiple of 14)
+# VGGT (primary reconstruction backend)
+ENABLE_VGGT = True                       # True = use VGGT, False = legacy pipeline
+VGGT_MODEL = "facebook/VGGT-1B"         # CVPR 2025 Best Paper
+VGGT_CONFIDENCE_THRESHOLD = 0.5          # Point cloud confidence filter
+VGGT_MAX_SIZE = 518                      # Input image max dimension
 
-# Metric depth (Phase 1)
+# Gemini scene analysis
+ENABLE_GEMINI_ANALYSIS = True            # True = Gemini semantic analysis
+GEMINI_MODEL = "gemini-3-flash-preview"          # Vertex AI model
+GEMINI_TIMEOUT = 30                      # Seconds to wait for Gemini
+
+# Legacy depth estimation (used when VGGT disabled)
 ENABLE_METRIC_DEPTH = True               # True = metric, False = relative
 METRIC_DEPTH_MODEL = "apple/DepthPro-hf" # Primary metric model
-CALIBRATION_METHOD = "auto"              # auto | user_reference | none
 
-# SfM
+# Legacy SfM (used when VGGT disabled)
 ENABLE_SFM = True                        # COLMAP SfM for multi-view alignment
 SFM_MIN_IMAGES = 3                       # Minimum images for SfM
 
 # 3D reconstruction
 POINT_CLOUD_DENSITY = 4                  # Sample every Nth pixel
 VOXEL_SIZE = 0.05                        # Voxel downsampling (meters)
-DEPTH_FUSION_METHOD = "tsdf"             # tsdf | poisson
 
 # Floor plan
-ASSUMED_ROOM_WIDTH_METERS = 4.0          # Default room width for scale
+ASSUMED_ROOM_WIDTH_METERS = 4.0          # Default room width (legacy only)
 FLOOR_PLAN_RESOLUTION = 100              # Grid resolution
 ```
 
@@ -339,9 +365,11 @@ missoula/
 |-- requirements.txt                # Python dependencies
 |
 |-- modules/
-|   |-- room_reconstructor.py       # Main orchestrator
-|   |-- depth_estimator.py          # Depth-Anything-V2 / DPT inference
-|   |-- sfm_processor.py            # COLMAP SfM (pycolmap)
+|   |-- room_reconstructor.py       # Main orchestrator (VGGT + Gemini + legacy)
+|   |-- vggt_reconstructor.py       # VGGT-1B single-pass reconstruction (NEW)
+|   |-- scene_analyzer.py           # Gemini 3 scene analysis (NEW)
+|   |-- depth_estimator.py          # Depth-Anything-V2 / DPT (legacy fallback)
+|   |-- sfm_processor.py            # COLMAP SfM (legacy fallback)
 |   |-- dense_reconstructor.py      # TSDF volumetric fusion
 |   |-- floor_plan_generator.py     # Legacy floor plan extraction
 |   |-- visualizer_3d.py            # Plotly 3D + PLY + HTML export
@@ -356,14 +384,14 @@ missoula/
 |   |   |-- opening_detector.py     # SegFormer door/window detection
 |   |
 |   |-- geometry/
-|   |   |-- floor_plan_model.py     # Data model (walls, rooms, openings)
+|   |   |-- floor_plan_model.py     # Data model (walls, rooms, openings, semantics)
 |   |   |-- measurement_engine.py   # Per-wall lengths, areas, chain dims
 |   |
 |   |-- rendering/
-|       |-- svg_renderer.py         # SVG vector floor plan
+|       |-- svg_renderer.py         # SVG vector floor plan (sliding doors)
 |       |-- dxf_renderer.py         # DXF/CAD export (AIA layers)
-|       |-- png_renderer.py         # Matplotlib architectural PNG
-|       |-- symbol_library.py       # Door arcs, window lines, scale bar
+|       |-- png_renderer.py         # Matplotlib architectural PNG (sliding doors)
+|       |-- symbol_library.py       # Door arcs, sliding doors, windows, scale bar
 |
 |-- tests/
 |   |-- test_phase1_metric_depth.py
@@ -388,27 +416,34 @@ missoula/
                    |           RoomReconstructor                |
                    |         (Main Orchestrator)                |
                    +-------------------------------------------+
-                   |                                           |
-          +--------+--------+                        +---------+---------+
-          |                 |                        |                   |
-   +------v------+  +------v------+          +------v------+   +--------v-------+
-   | MetricDepth |  |  SfM        |          |  Wall       |   | Opening        |
-   | Estimator   |  |  Processor  |          | Detector    |   | Detector       |
-   | (Depth Pro) |  |  (COLMAP)   |          | (Hough)     |   | (SegFormer)    |
-   +-------------+  +-------------+          +-------------+   +----------------+
-          |                 |                        |                   |
-          v                 v                        v                   v
-   +-------------+  +-------------+          +-------------+   +----------------+
-   |  Depth      |  |  Dense      |          |  Room       |   | FloorPlan      |
-   | Calibrator  |  | Reconstructor          | Segmenter   |   | Model          |
-   +-------------+  |  (TSDF)     |          +-------------+   | (data classes) |
-                    +-------------+                 |          +----------------+
-                                                    v                   |
-                                             +-------------+            v
-                                             | Measurement |    +----------------+
-                                             | Engine      |    | SVG / DXF /    |
-                                             +-------------+    | PNG Renderers  |
-                                                                +----------------+
+                   |                    |                       |
+          +--------v--------+  +-------v--------+     +--------v---------+
+          |  PRIMARY PATH   |  |   PARALLEL     |     | LEGACY FALLBACK  |
+          |                 |  |                 |     |                  |
+   +------v------+         |  +-------v--------+|    +------v------+  +------v------+
+   |   VGGT      |         |  | Gemini 3 Flash ||    | MetricDepth |  |  SfM        |
+   | Reconstructor         |  | (Vertex AI)    ||    | Estimator   |  |  Processor  |
+   | - metric depth        |  | - room type    ||    | (Depth Pro) |  |  (COLMAP)   |
+   | - camera poses        |  | - doors/windows||    +-------------+  +-------------+
+   | - focal lengths       |  | - room shape   ||          |                 |
+   | - point cloud         |  +----------------+|    +-----v-----+  +-------v-------+
+   +-------------+         |         |           |    |  Depth    |  |  TSDF/ICP     |
+          |                |         |           |    | Calibrate |  |  Fusion       |
+          v                |         v           |    +-----------+  +---------------+
+   +-------------+         |  +-------------+    |
+   | Wall        |<--------+  | FloorPlan   |    |
+   | Detector    |             | Model       |<---+
+   +-------------+             | (enriched)  |
+          |                    +-------------+
+   +------v------+                   |
+   | Room        |            +------v------+
+   | Segmenter   |            | SVG / DXF / |
+   +-------------+            | PNG Render  |
+          |                   +-------------+
+   +------v------+
+   | Measurement |
+   | Engine      |
+   +-------------+
 ```
 
 For full architecture details including Mermaid diagrams and sequence flows, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -438,11 +473,13 @@ The **Calibrate Measurements** panel allows post-hoc correction using a known wa
 
 | Library | Version | Purpose |
 |:--------|:--------|:--------|
+| **VGGT** | 0.0.1 | Visual Geometry Grounded Transformer (local clone) |
+| **google-genai** | 1.0+ | Gemini 3 Flash via Vertex AI |
 | **PyTorch** | 2.0+ | Deep learning inference runtime |
 | **Transformers** | 4.35+ | Hugging Face model loading (depth, segmentation) |
-| **timm** | 0.9+ | Vision model architectures |
+| **einops** | 0.8+ | Tensor operations (VGGT dependency) |
 | **Open3D** | 0.17+ | Point cloud processing, TSDF, ICP, filtering |
-| **pycolmap** | 0.6+ | COLMAP SfM (feature extraction, matching, mapping) |
+| **pycolmap** | 0.6+ | COLMAP SfM (legacy fallback) |
 | **OpenCV** | 4.8+ | Image processing, edge detection, Hough transforms |
 | **svgwrite** | 1.4+ | SVG floor plan generation |
 | **ezdxf** | 1.0+ | DXF/CAD file generation |
@@ -454,25 +491,42 @@ The **Calibrate Measurements** panel allows post-hoc correction using a known wa
 | **Shapely** | 2.0+ | Computational geometry |
 | **trimesh** | 4.0+ | Mesh utilities |
 
-Install all with `uv sync` or `pip install -r requirements.txt`.
+Install VGGT separately: `uv pip install -e ../vggt`, then `uv pip install -r requirements.txt`.
 
 ---
 
 ## Troubleshooting
 
-### CUDA Out of Memory
+### VGGT Out of Memory
+
+VGGT-1B requires significant GPU memory. If you run out of memory:
+
+```python
+# In config.py -- disable VGGT to use legacy pipeline:
+ENABLE_VGGT = False
+
+# Or reduce image size:
+VGGT_MAX_SIZE = 364         # Down from 518 (must be multiple of 14)
+```
+
+### Gemini Not Working
+
+```bash
+# Verify environment variables are set:
+echo $GOOGLE_GENAI_USE_VERTEXAI    # Should be "1"
+echo $GOOGLE_CLOUD_LOCATION        # Should be "global"
+echo $GOOGLE_CLOUD_PROJECT          # Your GCP project ID
+
+# Or disable Gemini (pipeline still works without it):
+# In config.py: ENABLE_GEMINI_ANALYSIS = False
+```
+
+### CUDA Out of Memory (Legacy Pipeline)
 
 ```python
 # In config.py -- reduce sizes:
 DEPTH_MAX_SIZE = 384        # Down from 518
 POINT_CLOUD_DENSITY = 6     # Up from 4 (fewer points)
-SFM_MAX_IMAGE_SIZE = 512    # Down from 1024
-```
-
-Or force CPU:
-```python
-# In modules/depth_estimator.py:
-self.device = "cpu"
 ```
 
 ### Model Download Fails
@@ -480,27 +534,28 @@ self.device = "cpu"
 Models download from Hugging Face on first run. If downloads fail:
 
 ```bash
+# Set token for rate limits:
+export HF_TOKEN=your_token_here
+
 # Pre-download the fallback model:
 uv run python -c "
 from transformers import DPTImageProcessor, DPTForDepthEstimation
 DPTImageProcessor.from_pretrained('Intel/dpt-large')
 DPTForDepthEstimation.from_pretrained('Intel/dpt-large')
 "
-
-# Set token for rate limits:
-export HF_TOKEN=your_token_here
 ```
 
 ### pycolmap Crashes (macOS)
 
-pycolmap's native library may crash with `SIGABRT` on some macOS configurations. The system handles this gracefully -- SfM is automatically disabled and the pipeline falls back to ICP/RANSAC registration. No action required.
+pycolmap's native library may crash with `SIGABRT` on some macOS configurations. When VGGT is enabled (default), COLMAP is not used. If using the legacy pipeline, SfM is automatically disabled and falls back to ICP/RANSAC registration.
 
 ### Poor Reconstruction Quality
 
 - Ensure photos cover all corners with overlap
 - Use even lighting (avoid harsh shadows)
 - Include the floor in every shot
-- Try adjusting `ASSUMED_ROOM_WIDTH_METERS` to match the actual room
+- With VGGT, measurements are metric -- no room width calibration needed
+- With legacy pipeline, try adjusting `ASSUMED_ROOM_WIDTH_METERS`
 - Use the calibration panel with a known wall measurement
 
 ---
@@ -511,17 +566,20 @@ pycolmap's native library may crash with `SIGABRT` on some macOS configurations.
 
 | Metric | Value | Notes |
 |:-------|:------|:------|
-| Measurement accuracy | Approximately +/- 15-25% | With metric depth; +/- 20-30% with relative depth |
+| Measurement accuracy (VGGT) | Metric depth -- model-dependent | VGGT produces metric depth; no ASSUMED_ROOM_WIDTH hack needed |
+| Measurement accuracy (legacy) | Approximately +/- 15-25% | With metric depth; +/- 20-30% with relative depth |
 | Room shape support | Rectangular rooms | L-shaped and irregular rooms: partial support |
 | Wall detection | 2+ walls per image | Requires visible depth discontinuities |
-| Opening detection | Doors and windows | Confidence threshold filtering applied |
+| Opening detection | Doors and windows | SegFormer + Gemini dual-source detection |
+| Semantic classification | Room type, door types | Via Gemini 3 Flash (confidence-scored) |
 
 ### Known Limitations
 
+- VGGT model is ~4 GB and requires GPU (CUDA or MPS) for reasonable inference speed
+- Gemini requires Google Cloud credentials and Vertex AI access
 - Floor plan grid resolution is 100x100 -- coarse for large rooms
 - Convex hull boundary cannot fully represent non-convex room shapes
-- Low-texture surfaces (white walls, uniform carpet) challenge feature matching
-- Metric depth models are large (1-1.5 GB each) and require significant RAM
+- Gemini door/window placement is approximate (positioned at 25%/50%/75% along walls)
 - Scale accuracy depends on depth model quality; not suitable for construction or legal purposes
 
 ### What This System Cannot Do
@@ -543,9 +601,11 @@ pycolmap's native library may crash with `SIGABRT` on some macOS configurations.
 | Phase 3: Architectural Rendering | Complete | SVG, DXF, PNG renderers with symbol library |
 | Phase 4: Opening Detection | Complete | SegFormer door/window detection with projection |
 | Phase 5: Integration & UI | Complete | Gradio UI with format tabs, calibration, measurements |
-| Phase 6: NeRF / Gaussian Splatting | Planned | Photorealistic visualization layer |
-| Phase 7: Furniture Detection | Planned | Object detection and placement in floor plans |
-| Phase 8: Multi-Room Support | Planned | Connected room topology and navigation |
+| **Phase 6: VGGT Integration** | **Complete** | **VGGT-1B single-pass reconstruction replaces SfM + depth + registration** |
+| **Phase 7: Gemini Integration** | **Complete** | **Gemini 3 Flash semantic analysis (room type, doors, windows) in parallel** |
+| Phase 8: NeRF / Gaussian Splatting | Planned | Photorealistic visualization layer |
+| Phase 9: Furniture Detection | Planned | Object detection and placement in floor plans |
+| Phase 10: Multi-Room Support | Planned | Connected room topology and navigation |
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the detailed 37-step breakdown and [FLOOR_PLAN_REVIEW.md](FLOOR_PLAN_REVIEW.md) for the 10-week improvement roadmap.
 
@@ -553,6 +613,8 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the detailed 37-step br
 
 ## Acknowledgments
 
+- **Meta Research** -- VGGT (Visual Geometry Grounded Transformer, CVPR 2025 Best Paper)
+- **Google** -- Gemini 3 Flash multimodal model via Vertex AI
 - **Apple** -- Depth Pro metric depth estimation model
 - **Hugging Face** -- Model hosting and Transformers library
 - **NVIDIA** -- SegFormer semantic segmentation architecture

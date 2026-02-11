@@ -27,6 +27,8 @@ class DoorOpening:
     position: np.ndarray  # 2D center point on wall line
     width: float  # meters
     swing_direction: str = "left"  # "left", "right", "double"
+    door_type: str = "single"  # "single", "sliding", "double", "closet"
+    source: str = "detected"  # "detected" or "gemini"
 
 
 @dataclass
@@ -35,6 +37,8 @@ class WindowOpening:
 
     position: np.ndarray  # 2D center point on wall line
     width: float  # meters
+    sill_height: Optional[float] = None  # meters from floor
+    source: str = "detected"  # "detected" or "gemini"
 
 
 @dataclass
@@ -43,6 +47,8 @@ class RoomPolygon:
 
     boundary: np.ndarray  # Nx2 array of vertices in meters
     name: str = "Room"
+    room_type: str = ""  # "bedroom", "kitchen", etc.
+    room_shape: str = ""  # "rectangular", "l_shaped", etc.
 
     @property
     def area(self) -> float:
@@ -76,3 +82,9 @@ class FloorPlanModel:
     dimensions: List[DimensionLine] = field(default_factory=list)
     scale: float = 50.0  # drawing scale, e.g. 1:50
     orientation: float = 0.0  # north angle in degrees
+    reconstruction_backend: str = ""  # "vggt" or "legacy"
+    semantic_confidence: float = 0.0  # Gemini confidence score
+    quality_mode: str = ""  # "high_confidence", "approximate", "needs_more_images"
+    export_policy: str = ""  # "normal_export", "annotate_as_approximate", "needs_more_images"
+    industry_ready: bool = False
+    quality_warnings: List[str] = field(default_factory=list)

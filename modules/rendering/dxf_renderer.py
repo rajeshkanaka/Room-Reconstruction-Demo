@@ -324,6 +324,30 @@ class DXFRenderer:
             },
         )
 
+        quality_text = self._quality_banner_text(model)
+        if quality_text:
+            msp.add_text(
+                quality_text,
+                height=0.10,
+                dxfattribs={
+                    "layer": "A-ANNO",
+                    "insert": (x_min, y_min - 1.05),
+                },
+            )
+
+    @staticmethod
+    def _quality_banner_text(model: FloorPlanModel) -> str:
+        """Build concise export-quality annotation for CAD consumers."""
+        policy = str(getattr(model, "export_policy", "") or "").lower()
+        mode = str(getattr(model, "quality_mode", "") or "").lower()
+        if policy == "needs_more_images" or mode == "needs_more_images":
+            return "QUALITY: NEEDS MORE IMAGES - DRAFT ONLY"
+        if policy == "annotate_as_approximate" or mode == "approximate":
+            return "QUALITY: APPROXIMATE - NOT FOR CONSTRUCTION"
+        if policy == "normal_export" or mode == "high_confidence":
+            return "QUALITY: HIGH CONFIDENCE"
+        return ""
+
     def _find_parent_wall(self, position, walls):
         """Find the wall closest to a given position."""
         if not walls:

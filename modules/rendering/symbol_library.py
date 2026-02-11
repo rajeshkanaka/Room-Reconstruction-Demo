@@ -113,6 +113,51 @@ class SymbolLibrary:
             "width": width,
         }
 
+    def sliding_door_symbol(
+        self,
+        position: np.ndarray,
+        width: float,
+        wall_direction: np.ndarray,
+        thickness: float = 0.15,
+    ) -> Dict:
+        """
+        Sliding door symbol: two overlapping parallel lines in wall gap.
+
+        Args:
+            position: Center point of door on wall line (2D)
+            width: Door width in meters
+            wall_direction: Unit vector along the wall
+            thickness: Wall thickness
+
+        Returns:
+            Dict with 'gap', 'lines' primitives
+        """
+        wall_dir = wall_direction / max(np.linalg.norm(wall_direction), 1e-6)
+        perp = np.array([-wall_dir[1], wall_dir[0]])
+
+        half_w = width / 2
+        gap_start = position - wall_dir * half_w
+        gap_end = position + wall_dir * half_w
+
+        # Two parallel lines offset slightly (representing sliding panels)
+        offset = thickness / 4
+        lines = [
+            (gap_start, position + wall_dir * (half_w * 0.1)),
+            (position - wall_dir * (half_w * 0.1), gap_end),
+        ]
+        # Add small perpendicular offsets to distinguish panels
+        line_pairs = []
+        for i, (s, e) in enumerate(lines):
+            off = perp * offset * (1 if i == 0 else -1)
+            line_pairs.append((s + off, e + off))
+
+        return {
+            "type": "sliding_door",
+            "gap": {"start": gap_start, "end": gap_end},
+            "lines": line_pairs,
+            "width": width,
+        }
+
     def dimension_tick(
         self,
         position: np.ndarray,

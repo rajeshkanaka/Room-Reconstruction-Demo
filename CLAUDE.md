@@ -4,15 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Does
 
-AI-powered room reconstruction from 4-5 photos: estimates depth per image, optionally runs COLMAP SfM for camera poses, fuses point clouds, generates 2D floor plans with measurements, and produces interactive 3D visualizations. Proof-of-concept with ~20-30% measurement accuracy.
+AI-powered room reconstruction from 4-5 photos. Primary backend: VGGT (CVPR 2025 Best Paper) produces metric depth, camera poses, focal lengths, and aligned point cloud in a single forward pass. Gemini 3 Flash adds semantic scene analysis (room type, doors, windows) in parallel. Generates 2D floor plans (SVG, DXF, PNG) with measurements and interactive 3D visualizations.
 
 ## Commands
 
 ```bash
 # Install dependencies (uv recommended)
+uv pip install -e ../vggt  # VGGT from local clone
 uv pip install -r requirements.txt
 
-# Run web interface (Gradio, opens at http://localhost:7860)
+# Gemini 3 requires Vertex AI env vars
+export GOOGLE_GENAI_USE_VERTEXAI=1
+export GOOGLE_CLOUD_LOCATION="global"
+export GOOGLE_CLOUD_PROJECT="adktalentpulse360"
+
+# Run web interface (Gradio, opens at http://localhost:7850)
 uv run python app.py
 
 # Run CLI
@@ -22,11 +28,13 @@ uv run python run_cli.py photos/*.jpg --room-width 5.0 --visualize
 # No test suite or linting configured yet
 ```
 
-First run downloads Depth-Anything-V2 model (~350MB-1GB) from Hugging Face automatically.
+First run downloads VGGT-1B model (~4GB) from Hugging Face automatically.
 
 ## Architecture
 
-**Pipeline:** Photos → SfM (optional, COLMAP) → Depth estimation (per image) → 3D point clouds → Multi-view fusion → Floor plan extraction → 3D visualization
+**Primary Pipeline:** Photos → VGGT (metric depth + camera poses + point cloud) ‖ Gemini 3 (semantic analysis) → Wall detection → Floor plan + 3D visualization
+
+**Legacy Fallback:** Photos → SfM (COLMAP) → Depth estimation (per image) → Multi-view fusion → Floor plan
 
 **Entry points:**
 - `app.py` — Gradio web UI. `process_images()` collects uploaded images, calls `RoomReconstructor.reconstruct_from_arrays()`, returns floor plan image + Plotly figure + measurements markdown.
@@ -34,36 +42,43 @@ First run downloads Depth-Anything-V2 model (~350MB-1GB) from Hugging Face autom
 
 **Core orchestrator:** `modules/room_reconstructor.py` (`RoomReconstructor` class)
 - `reconstruct()` / `reconstruct_from_arrays()` — main entry methods
-- Fusion strategy selection: TSDF fusion (with SfM poses) → SfM-based alignment → legacy ICP/RANSAC fallback
+- VGGT path (primary): single forward pass replaces SfM + depth + registration
+- Gemini runs in parallel via ThreadPoolExecutor (adds zero latency)
+- Legacy fallback: TSDF fusion → SfM alignment → ICP/RANSAC
 - Postprocessing: statistical outlier removal + voxel downsampling
 
 **Processing modules (all in `modules/`):**
 
 | Module | Class | Role |
 |--------|-------|------|
-| `depth_estimator.py` | `DepthEstimator` | Monocular depth from Depth-Anything-V2 (fallback: Intel DPT). Returns normalized [0,1] depth maps. Auto-detects CUDA. |
-| `sfm_processor.py` | `SfMProcessor` | COLMAP SfM via pycolmap. SIFT features → exhaustive matching → incremental mapping. Outputs camera poses (4x4 matrices) + intrinsics. |
-| `dense_reconstructor.py` | `DenseReconstructor` | TSDF volumetric fusion from multiple depth maps + SfM camera poses. |
-| `floor_plan_generator.py` | `FloorPlanGenerator` | Horizontal slice (10-30% height) → 2D density grid (100x100) → Hough line wall detection → convex hull boundary → bounding box measurements. Scales using `ASSUMED_ROOM_WIDTH_METERS`. |
-| `visualizer_3d.py` | `Visualizer3D` | Plotly interactive 3D scatter, Open3D desktop viewer, PLY export, optional Poisson mesh. Also contains `ScaleEstimator` utility. |
+| `vggt_reconstructor.py` | `VGGTReconstructor` | **Primary.** VGGT-1B single-pass: metric depth + camera poses + focal lengths + aligned point cloud. Replaces SfM + DepthEstimator + registration. |
+| `scene_analyzer.py` | `SceneAnalyzer` | Gemini 3 Flash via Vertex AI. Room type, doors, windows, room shape classification. Structured JSON output. |
+| `depth_estimator.py` | `DepthEstimator` | **Legacy fallback.** Monocular depth from Depth-Anything-V2. Returns normalized [0,1] depth maps. |
+| `sfm_processor.py` | `SfMProcessor` | **Legacy fallback.** COLMAP SfM via pycolmap. |
+| `dense_reconstructor.py` | `DenseReconstructor` | TSDF volumetric fusion (used with SfM poses). |
+| `floor_plan_generator.py` | `FloorPlanGenerator` | Horizontal slice → 2D density grid → Hough line wall detection → measurements. |
+| `visualizer_3d.py` | `Visualizer3D` | Plotly 3D scatter, Open3D viewer, PLY export, Poisson mesh. |
 
-**Configuration:** `config.py` — single file with all parameters (depth model, SfM settings, floor plan resolution, camera intrinsics, voxel sizes, etc.).
+**Data model:** `modules/geometry/floor_plan_model.py` — `FloorPlanModel` with `WallSegment`, `DoorOpening` (door_type, source), `WindowOpening` (sill_height, source), `RoomPolygon` (room_type, room_shape), `DimensionLine`.
 
-**Outputs written to `./outputs/`:** floor plan PNG, interactive 3D HTML, PLY point cloud, optional PLY mesh.
+**Renderers:** `modules/rendering/` — `SVGRenderer`, `PNGRenderer`, `SymbolLibrary` (including sliding door symbol).
+
+**Configuration:** `config.py` — all parameters including `ENABLE_VGGT`, `VGGT_MODEL`, `ENABLE_GEMINI_ANALYSIS`, `GEMINI_MODEL`.
+
+**Outputs written to `./outputs/`:** floor plan PNG/SVG/DXF, interactive 3D HTML, PLY point cloud, optional PLY mesh.
 
 ## Key Design Decisions
 
-- **Relative depth model** (Depth-Anything-V2 outputs [0,1], not metric) — measurements depend on `ASSUMED_ROOM_WIDTH_METERS` user input for scale. This is the primary accuracy bottleneck.
-- **Three fusion strategies** with automatic fallback: TSDF (best, needs SfM) → SfM alignment → legacy ICP/RANSAC.
-- **pycolmap is optional** — SfM gracefully disabled if not installed; falls back to heuristic registration.
-- **Floor plan uses convex hull** — cannot handle L-shaped or U-shaped rooms.
-- **Hardcoded camera intrinsics** (fx=fy=500, cx=cy=256) used when SfM is unavailable.
+- **VGGT as primary backend** — single forward pass produces metric depth + camera poses + aligned 3D points. No ASSUMED_ROOM_WIDTH hack needed.
+- **Gemini 3 in parallel** — semantic analysis runs concurrently with reconstruction via ThreadPoolExecutor. Zero additional latency.
+- **Graceful degradation** — if VGGT unavailable, falls back to legacy pipeline (SfM + relative depth). If Gemini unavailable, floor plan still generated without semantic labels.
+- **FloorPlanModel enrichment** — Gemini-detected doors/windows merged into the model with deduplication (0.5m threshold).
+- **Config-driven feature flags** — `ENABLE_VGGT` and `ENABLE_GEMINI_ANALYSIS` toggle both backends independently.
 
 ## Known Limitations
 
-- Measurement accuracy ±20-30% (relative depth + assumed room width scaling)
+- VGGT model is ~4GB, requires GPU for reasonable performance (MPS/CUDA)
+- Gemini requires Vertex AI credentials (GOOGLE_CLOUD_PROJECT env var)
 - Floor plan grid is 100x100 — coarse resolution for larger rooms
-- No door/window/semantic detection
 - Convex hull boundary cannot represent non-convex room shapes
-- Raster PNG output only — no vector/CAD export (DXF/SVG)
-- `FLOOR_PLAN_REVIEW.md` contains a detailed 10-week improvement roadmap addressing these issues
+- Gemini door/window placement is approximate (placed at 25%/50%/75% along detected walls)

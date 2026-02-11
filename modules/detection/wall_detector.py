@@ -3,6 +3,7 @@ Wall Detection Module
 
 Detects walls from point clouds and depth maps using:
 - RANSAC floor plane detection (replaces fixed height slice)
+- Vertical plane fitting in 3D point cloud (primary wall extraction)
 - LSD line segment detection from depth discontinuities
 - Manhattan World alignment (snaps walls to 90-degree grid)
 """
@@ -19,8 +20,9 @@ class WallDetector:
 
     Pipeline:
     1. detect_floor_plane() — RANSAC plane fitting for the floor
-    2. detect_walls_from_depth() — depth gradient → line segments
-    3. align_walls_manhattan() — snap to perpendicular grid
+    2. detect_walls_from_point_cloud_planes() — 3D planes → 2D segments
+    3. detect_walls_from_depth() — depth gradient → line segments (fallback)
+    4. align_walls_manhattan() — snap to perpendicular grid
     """
 
     def __init__(
@@ -33,7 +35,13 @@ class WallDetector:
         self.floor_ransac_n = floor_ransac_n
         self.floor_num_iterations = floor_num_iterations
 
-    def detect_floor_plane(self, points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def detect_floor_plane(
+        self,
+        points: np.ndarray,
+        up_axis: Optional[np.ndarray] = None,
+        min_up_dot: float = 0.75,
+        max_candidates: int = 5,
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Detect the dominant horizontal plane (floor) using RANSAC.
 
@@ -47,34 +55,85 @@ class WallDetector:
         if len(points) < 10:
             return np.array([0, 1, 0, 0], dtype=np.float64), np.array([], dtype=int)
 
+        if up_axis is None:
+            up_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        up_axis = up_axis / (np.linalg.norm(up_axis) + 1e-12)
+
         try:
             import open3d as o3d
 
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(points.astype(np.float64))
+            remaining = np.arange(len(points))
+            candidates = []
 
-            plane, inliers = pcd.segment_plane(
-                distance_threshold=self.floor_distance_threshold,
-                ransac_n=self.floor_ransac_n,
-                num_iterations=self.floor_num_iterations,
-            )
+            for _ in range(max_candidates):
+                if len(remaining) < max(self.floor_ransac_n * 3, 30):
+                    break
 
-            plane = np.array(plane)
-            inlier_indices = np.array(inliers)
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(points[remaining].astype(np.float64))
 
-            # Ensure normal points "up" (positive Y component)
-            if plane[1] < 0:
-                plane = -plane
+                plane, inliers_local = pcd.segment_plane(
+                    distance_threshold=self.floor_distance_threshold,
+                    ransac_n=self.floor_ransac_n,
+                    num_iterations=self.floor_num_iterations,
+                )
+
+                if len(inliers_local) < 20:
+                    break
+
+                plane = np.array(plane, dtype=np.float64)
+                normal = plane[:3]
+                normal_norm = np.linalg.norm(normal)
+                if normal_norm < 1e-9:
+                    break
+                normal = normal / normal_norm
+                up_dot = float(abs(np.dot(normal, up_axis)))
+
+                inlier_indices = remaining[np.array(inliers_local, dtype=int)]
+                heights = points[inlier_indices] @ up_axis
+                median_height = float(np.median(heights))
+
+                if np.dot(plane[:3], up_axis) < 0:
+                    plane = -plane
+
+                candidates.append(
+                    {
+                        "plane": plane,
+                        "inliers": inlier_indices,
+                        "up_dot": up_dot,
+                        "height": median_height,
+                    }
+                )
+
+                keep_mask = np.ones(len(remaining), dtype=bool)
+                keep_mask[np.array(inliers_local, dtype=int)] = False
+                remaining = remaining[keep_mask]
+
+            if not candidates:
+                return self._fallback_floor_detection(points)
+
+            horizontal = [c for c in candidates if c["up_dot"] >= min_up_dot]
+            if horizontal:
+                # Prefer the lowest plausible horizontal plane as the floor.
+                min_inliers = max(20, int(0.02 * len(points)))
+                plausible = [c for c in horizontal if len(c["inliers"]) >= min_inliers]
+                floor = min(plausible or horizontal, key=lambda c: c["height"])
+            else:
+                # Fallback to the most horizontal + well-supported plane.
+                floor = max(
+                    candidates, key=lambda c: c["up_dot"] * len(c["inliers"])
+                )
 
             print(
                 colored(
-                    f"[WallDetector] Floor plane normal: [{plane[0]:.3f}, {plane[1]:.3f}, {plane[2]:.3f}], "
-                    f"inliers: {len(inlier_indices)}",
+                    f"[WallDetector] Floor plane normal: "
+                    f"[{floor['plane'][0]:.3f}, {floor['plane'][1]:.3f}, {floor['plane'][2]:.3f}], "
+                    f"inliers: {len(floor['inliers'])}, up_dot={floor['up_dot']:.3f}",
                     "green",
                 )
             )
 
-            return plane, inlier_indices
+            return floor["plane"], floor["inliers"]
 
         except ImportError:
             print(
@@ -105,31 +164,183 @@ class WallDetector:
 
         return plane, inlier_indices
 
-    def detect_walls_from_depth(
+    def detect_walls_from_point_cloud_planes(
+        self,
+        points: np.ndarray,
+        floor_height: Optional[float],
+        up_axis: Optional[np.ndarray] = None,
+        distance_threshold: float = 0.05,
+        min_height_span: float = 1.2,
+        min_length: float = 0.8,
+        max_up_dot: float = 0.25,
+        max_planes: int = 8,
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Detect wall segments directly from 3D vertical planes.
+
+        This is a structure-first alternative to depth-edge extraction.
+        Each detected vertical plane is projected into a top-down line segment.
+
+        Args:
+            points: Nx3 world-space point cloud.
+            floor_height: Estimated floor Y in world-space.
+            up_axis: World up direction (default +Y).
+            distance_threshold: RANSAC inlier threshold in meters.
+            min_height_span: Minimum vertical span for a plane to count as wall.
+            min_length: Minimum 2D wall segment length in meters.
+            max_up_dot: Maximum |dot(normal, up)| allowed for vertical walls.
+            max_planes: Maximum number of plane candidates to evaluate.
+
+        Returns:
+            List of (start_2d, end_2d) wall segments in world XZ coordinates.
+        """
+        if points is None or len(points) < 120:
+            return []
+
+        if up_axis is None:
+            up_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        up_axis = up_axis / (np.linalg.norm(up_axis) + 1e-12)
+
+        finite_mask = np.isfinite(points).all(axis=1)
+        candidates = points[finite_mask]
+        if len(candidates) < 120:
+            return []
+
+        if floor_height is not None:
+            # Keep likely wall points above floor, below likely ceiling.
+            h = candidates @ up_axis
+            mask_h = (h > floor_height + 0.12) & (h < floor_height + 3.6)
+            candidates = candidates[mask_h]
+
+        if len(candidates) < 120:
+            return []
+
+        try:
+            import open3d as o3d
+        except ImportError:
+            return []
+
+        remaining = np.arange(len(candidates))
+        segments: List[Tuple[np.ndarray, np.ndarray]] = []
+
+        for _ in range(max_planes):
+            if len(remaining) < 80:
+                break
+
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(
+                candidates[remaining].astype(np.float64)
+            )
+            plane, inliers_local = pcd.segment_plane(
+                distance_threshold=distance_threshold,
+                ransac_n=3,
+                num_iterations=max(self.floor_num_iterations, 800),
+            )
+
+            if len(inliers_local) < 60:
+                break
+
+            inliers_local = np.array(inliers_local, dtype=int)
+            inlier_idx = remaining[inliers_local]
+            plane = np.array(plane, dtype=np.float64)
+            normal = plane[:3]
+            normal_norm = np.linalg.norm(normal)
+            if normal_norm < 1e-9:
+                remaining = np.delete(remaining, inliers_local)
+                continue
+            normal = normal / normal_norm
+            up_dot = float(abs(np.dot(normal, up_axis)))
+
+            # Vertical wall planes should have normals nearly perpendicular to up.
+            if up_dot > max_up_dot:
+                remaining = np.delete(remaining, inliers_local)
+                continue
+
+            inlier_points = candidates[inlier_idx]
+            heights = inlier_points @ up_axis
+            height_span = float(np.percentile(heights, 95) - np.percentile(heights, 5))
+            if height_span < min_height_span:
+                remaining = np.delete(remaining, inliers_local)
+                continue
+
+            segment = self._plane_inliers_to_topdown_segment(
+                inlier_points, min_length=min_length
+            )
+            if segment is not None:
+                segments.append(segment)
+
+            remaining = np.delete(remaining, inliers_local)
+
+        if len(segments) > 1:
+            segments = self._merge_colinear(segments, distance_threshold=0.15)
+
+        print(
+            colored(
+                f"[WallDetector] Detected {len(segments)} wall segments from 3D planes",
+                "green" if segments else "yellow",
+            )
+        )
+        return segments
+
+    def _plane_inliers_to_topdown_segment(
+        self,
+        inlier_points: np.ndarray,
+        min_length: float = 0.8,
+        trim_percentile: float = 5.0,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Project plane inliers to XZ and fit a robust dominant line segment."""
+        if inlier_points is None or len(inlier_points) < 20:
+            return None
+
+        pts2d = inlier_points[:, [0, 2]].astype(np.float64)
+        if not np.isfinite(pts2d).all():
+            pts2d = pts2d[np.isfinite(pts2d).all(axis=1)]
+        if len(pts2d) < 20:
+            return None
+
+        centered = pts2d - pts2d.mean(axis=0, keepdims=True)
+        cov = np.cov(centered, rowvar=False)
+        if cov.shape != (2, 2) or not np.isfinite(cov).all():
+            return None
+
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        direction = eigvecs[:, int(np.argmax(eigvals))]
+        direction = direction / (np.linalg.norm(direction) + 1e-12)
+        orth = np.array([-direction[1], direction[0]], dtype=np.float64)
+
+        t = pts2d @ direction
+        o = pts2d @ orth
+        t0, t1 = np.percentile(t, [trim_percentile, 100.0 - trim_percentile])
+        o_mid = float(np.median(o))
+
+        length = float(t1 - t0)
+        if length < min_length:
+            return None
+
+        start = direction * float(t0) + orth * o_mid
+        end = direction * float(t1) + orth * o_mid
+        return start.astype(np.float64), end.astype(np.float64)
+
+    def detect_wall_lines_from_depth(
         self,
         depth: np.ndarray,
-        fx: float = 500.0,
-        fy: float = 500.0,
         gradient_threshold: float = 0.3,
         min_line_length_ratio: float = 0.08,
         max_line_gap_ratio: float = 0.03,
-    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    ) -> List[Tuple[int, int, int, int]]:
         """
-        Detect wall line segments from a depth map using depth gradients + LSD.
+        Detect wall line segments (pixel coordinates) from depth gradients.
 
         Walls appear as depth discontinuities (wall-floor, wall-wall edges).
-        Extracts line segments and projects them to ground-plane coordinates.
 
         Args:
             depth: Depth map (H, W) in meters
-            fx: Focal length X in pixels
-            fy: Focal length Y in pixels
             gradient_threshold: Minimum gradient magnitude for edge detection
             min_line_length_ratio: Minimum line length as fraction of image width
             max_line_gap_ratio: Maximum gap between line segments to merge
 
         Returns:
-            List of (start_2d, end_2d) tuples in metric ground-plane coordinates
+            List of (x1, y1, x2, y2) line segments in depth-map pixel space
         """
         h, w = depth.shape
 
@@ -167,27 +378,10 @@ class WallDetector:
         if lines is None:
             return []
 
-        # Project pixel line segments to ground-plane coordinates
-        cx, cy = w / 2.0, h / 2.0
         segments = []
-
         for line in lines:
             x1, y1, x2, y2 = line[0]
-
-            # Get depth at line endpoints (use local median for robustness)
-            d1 = self._sample_depth(depth, x1, y1)
-            d2 = self._sample_depth(depth, x2, y2)
-
-            if d1 <= 0 or d2 <= 0:
-                continue
-
-            # Back-project to 3D ground plane (X, Z)
-            gx1 = (x1 - cx) * d1 / fx
-            gz1 = d1
-            gx2 = (x2 - cx) * d2 / fx
-            gz2 = d2
-
-            segments.append((np.array([gx1, gz1]), np.array([gx2, gz2])))
+            segments.append((int(x1), int(y1), int(x2), int(y2)))
 
         print(
             colored(
@@ -196,6 +390,48 @@ class WallDetector:
             )
         )
 
+        return segments
+
+    def detect_walls_from_depth(
+        self,
+        depth: np.ndarray,
+        fx: float = 500.0,
+        fy: float = 500.0,
+        gradient_threshold: float = 0.3,
+        min_line_length_ratio: float = 0.08,
+        max_line_gap_ratio: float = 0.03,
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Backward-compatible API that returns approximate camera-local XZ segments.
+        """
+        lines = self.detect_wall_lines_from_depth(
+            depth,
+            gradient_threshold=gradient_threshold,
+            min_line_length_ratio=min_line_length_ratio,
+            max_line_gap_ratio=max_line_gap_ratio,
+        )
+        if not lines:
+            return []
+
+        h, w = depth.shape
+        cx, cy = w / 2.0, h / 2.0
+        segments = []
+        for x1, y1, x2, y2 in lines:
+            d1 = self._sample_depth(depth, x1, y1)
+            d2 = self._sample_depth(depth, x2, y2)
+            if d1 <= 0 or d2 <= 0:
+                continue
+
+            x1_cam = (x1 - cx) * d1 / fx
+            y1_cam = (y1 - cy) * d1 / fy
+            z1_cam = d1
+            x2_cam = (x2 - cx) * d2 / fx
+            y2_cam = (y2 - cy) * d2 / fy
+            z2_cam = d2
+
+            # Approximate top-down by dropping Y.
+            _ = y1_cam, y2_cam
+            segments.append((np.array([x1_cam, z1_cam]), np.array([x2_cam, z2_cam])))
         return segments
 
     def _sample_depth(

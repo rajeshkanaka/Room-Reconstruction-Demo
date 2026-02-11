@@ -25,6 +25,11 @@ from modules.geometry.floor_plan_model import (
 
 
 class TestOpeningDetector:
+    def test_ade20k_door_class_constant(self):
+        from modules.detection.opening_detector import ADE20K_DOOR
+
+        assert ADE20K_DOOR == 14
+
     def test_import(self):
         from modules.detection.opening_detector import OpeningDetector
 
@@ -71,6 +76,22 @@ class TestOpeningDetector:
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         result = det.detect_openings(img)
         assert isinstance(result, dict)
+
+    def test_maps_bbox_from_image_to_depth_space(self):
+        from modules.detection.opening_detector import OpeningDetector
+
+        det = OpeningDetector.__new__(OpeningDetector)
+        bbox = {"x": 100, "y": 200, "w": 80, "h": 160}
+        mapped = det._map_bbox_to_depth(
+            bbox=bbox,
+            image_shape=(1280, 640, 3),
+            depth_shape=(512, 256),
+        )
+
+        assert mapped["x"] == 40
+        assert mapped["y"] == 80
+        assert mapped["w"] == 32
+        assert mapped["h"] == 64
 
 
 # ---------- Projection Tests ----------
@@ -155,6 +176,87 @@ class TestProjection:
         ]
         unique = det._deduplicate_openings(openings, threshold=0.5)
         assert len(unique) == 2
+
+    def test_project_uses_camera_pose_for_wall_attachment(self):
+        from modules.detection.opening_detector import OpeningDetector
+
+        det = OpeningDetector.__new__(OpeningDetector)
+
+        bbox = {"x": 275, "y": 120, "w": 90, "h": 240, "confidence": 0.9}
+        depth = np.ones((480, 640), dtype=np.float32) * 3.0
+        wall = WallSegment(start=np.array([0.0, 3.0]), end=np.array([4.0, 3.0]))
+
+        pose = np.eye(4)
+        pose[0, 3] = 3.2
+        pose[2, 3] = 0.0
+
+        opening = det.project_to_floor_plan(
+            bbox,
+            depth,
+            fx=500,
+            fy=500,
+            parent_wall=wall,
+            opening_type="door",
+            camera_pose=pose,
+            wall_index=0,
+            confidence=0.9,
+            view_index=0,
+        )
+        assert opening is not None
+        assert 2.8 < opening.position[0] < 3.6
+        assert getattr(opening, "wall_index", -1) == 0
+        assert getattr(opening, "support_views", 0) == 1
+
+    def test_detect_and_project_fuses_multi_view_observations(self):
+        from modules.detection.opening_detector import OpeningDetector
+
+        det = OpeningDetector.__new__(OpeningDetector)
+        det.last_fusion_stats = {}
+
+        def mock_detect_openings(_image):
+            return {
+                "doors": [
+                    {"x": 275, "y": 120, "w": 90, "h": 240, "confidence": 0.95}
+                ],
+                "windows": [],
+            }
+
+        det.detect_openings = mock_detect_openings
+
+        images = [
+            np.zeros((480, 640, 3), dtype=np.uint8),
+            np.zeros((480, 640, 3), dtype=np.uint8),
+        ]
+        depths = [
+            np.ones((480, 640), dtype=np.float32) * 3.0,
+            np.ones((480, 640), dtype=np.float32) * 3.0,
+        ]
+        walls = [WallSegment(start=np.array([0.0, 3.0]), end=np.array([4.0, 3.0]))]
+
+        pose0 = np.eye(4)
+        pose0[0, 3] = 1.0
+        pose0[2, 3] = 0.0
+        pose1 = np.eye(4)
+        pose1[0, 3] = 1.2
+        pose1[2, 3] = 0.0
+
+        doors, windows = det.detect_and_project(
+            images=images,
+            depth_maps=depths,
+            walls=walls,
+            fx=500,
+            fy=500,
+            camera_poses={0: {"transform": pose0}, 1: {"transform": pose1}},
+        )
+
+        assert len(windows) == 0
+        assert len(doors) == 1
+        door = doors[0]
+        assert getattr(door, "source", "") == "fused_multi_view"
+        assert getattr(door, "support_views", 0) >= 2
+        assert getattr(door, "wall_index", -1) == 0
+        assert det.last_fusion_stats["raw_door_observations"] >= 2
+        assert det.last_fusion_stats["fused_doors"] == 1
 
 
 # ---------- Rendering Integration Tests ----------

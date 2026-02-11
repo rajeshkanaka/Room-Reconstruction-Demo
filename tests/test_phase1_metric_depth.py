@@ -102,6 +102,79 @@ class TestDepthCalibrator:
         points = rng.random((1000, 3)) * 0.1
         assert cal.sanity_check(points) == False
 
+    def test_solve_scale_from_cues_auto_prefers_height_prior(self):
+        from modules.depth.depth_calibrator import DepthCalibrator
+
+        cal = DepthCalibrator()
+        rng = np.random.default_rng(7)
+        points = rng.random((2000, 3))
+        points[:, 0] *= 1.0  # horizontal span
+        points[:, 1] *= 1.1  # height span
+        points[:, 2] *= 0.9  # horizontal span
+
+        solution = cal.solve_scale_from_cues(
+            points,
+            assumed_room_width=4.0,
+            camera_poses=None,
+            mode="auto",
+        )
+
+        assert 2.0 < solution["scale_factor"] < 3.5
+        cue_names = {cue["name"] for cue in solution["cues"]}
+        assert "ceiling_height_prior" in cue_names
+        assert "room_width_prior" in cue_names
+
+    def test_solve_scale_from_cues_user_reference_favors_width(self):
+        from modules.depth.depth_calibrator import DepthCalibrator
+
+        cal = DepthCalibrator()
+        rng = np.random.default_rng(11)
+        points = rng.random((2000, 3))
+        points[:, 0] *= 1.0
+        points[:, 1] *= 1.1
+        points[:, 2] *= 0.9
+
+        solution = cal.solve_scale_from_cues(
+            points,
+            assumed_room_width=4.0,
+            camera_poses=None,
+            mode="user_reference",
+        )
+
+        assert solution["scale_factor"] > 3.0
+        assert solution["confidence"] in ("high", "medium")
+
+    def test_solve_scale_from_cues_uses_camera_baseline(self):
+        from modules.depth.depth_calibrator import DepthCalibrator
+
+        cal = DepthCalibrator()
+        rng = np.random.default_rng(19)
+        points = rng.random((1200, 3))
+        points[:, 0] *= 1.0
+        points[:, 1] *= 1.1
+        points[:, 2] *= 0.9
+
+        camera_poses = {
+            0: {"transform": np.eye(4)},
+            1: {"transform": np.array(
+                [[1.0, 0.0, 0.0, 0.4], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+            )},
+            2: {"transform": np.array(
+                [[1.0, 0.0, 0.0, 0.8], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+            )},
+        }
+
+        solution = cal.solve_scale_from_cues(
+            points,
+            assumed_room_width=None,
+            camera_poses=camera_poses,
+            mode="auto",
+        )
+
+        cue_names = {cue["name"] for cue in solution["cues"]}
+        assert "camera_baseline_prior" in cue_names
+        assert solution["scale_factor"] > 1.5
+
 
 class TestFloorPlanModel:
     """Step 2.1 (already created in 1.1): FloorPlanModel dataclass tests."""

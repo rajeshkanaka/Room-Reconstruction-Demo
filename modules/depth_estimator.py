@@ -102,12 +102,19 @@ class DepthEstimator:
             )
         )
 
+    @staticmethod
+    def _hf_token():
+        return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
     def _load_depth_anything_v2(self, model_name: str):
         """Load Depth Anything V2 model."""
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
-        self.processor = AutoImageProcessor.from_pretrained(model_name)
-        self.model = AutoModelForDepthEstimation.from_pretrained(model_name)
+        token = self._hf_token()
+        self.processor = AutoImageProcessor.from_pretrained(model_name, token=token)
+        self.model = AutoModelForDepthEstimation.from_pretrained(
+            model_name, token=token
+        )
         self.model.to(self.device)
         self.model.eval()
         self.model_type = "depth_anything_v2"
@@ -116,8 +123,9 @@ class DepthEstimator:
         """Load DPT/MiDaS model."""
         from transformers import DPTImageProcessor, DPTForDepthEstimation
 
-        self.processor = DPTImageProcessor.from_pretrained(model_name)
-        self.model = DPTForDepthEstimation.from_pretrained(model_name)
+        token = self._hf_token()
+        self.processor = DPTImageProcessor.from_pretrained(model_name, token=token)
+        self.model = DPTForDepthEstimation.from_pretrained(model_name, token=token)
         self.model.to(self.device)
         self.model.eval()
         self.model_type = "dpt"
@@ -126,8 +134,11 @@ class DepthEstimator:
         """Load ZoeDepth model for metric depth."""
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
-        self.processor = AutoImageProcessor.from_pretrained(model_name)
-        self.model = AutoModelForDepthEstimation.from_pretrained(model_name)
+        token = self._hf_token()
+        self.processor = AutoImageProcessor.from_pretrained(model_name, token=token)
+        self.model = AutoModelForDepthEstimation.from_pretrained(
+            model_name, token=token
+        )
         self.model.to(self.device)
         self.model.eval()
         self.model_type = "zoedepth"
