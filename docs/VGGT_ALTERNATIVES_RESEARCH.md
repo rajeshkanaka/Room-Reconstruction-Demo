@@ -317,7 +317,7 @@ VGGT (Visual Geometry Grounded Transformer) is currently the primary AI backend 
 - 🎯 **Built-in room semantics** (no post-processing needed)
 - 🎯 **Automatic door/window placement**
 - 🎯 **Faster for sparse views** (no 3D needed)
-- 🎯 **Better handling of complex layouts** (L-shaped, U-shaped rooms) 6
+- 🎯 **Better handling of complex layouts** (L-shaped, U-shaped rooms)
 
 **Complexity:** Medium
 **Integration:** Can be alternative pipeline for single-view scenarios
