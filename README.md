@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/pytorch-2.0%2B-ee4c2c?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/tests-61%20passed-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-123%20passed-brightgreen?style=flat-square" alt="Tests">
 </p>
 
 <h1 align="center">Room Reconstruction from Photos</h1>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  VGGT single-pass reconstruction &bull; Gemini 3 scene analysis &bull; Metric depth &bull; Wall detection &bull; Door/window recognition &bull; SVG / DXF / PNG output &bull; Interactive 3D
+  VGGT single-pass reconstruction &bull; CAGE learned floor plan detection &bull; Gemini 3 scene analysis &bull; Door/window recognition &bull; SVG / DXF / PNG output &bull; Interactive 3D
 </p>
 
 ---
@@ -48,6 +48,14 @@ The following table evaluates every technology referenced in the [3D Room Recons
 | **ICP/RANSAC Registration** | **Used** | Fallback multi-view alignment | Legacy alignment when both VGGT and SfM are unavailable. RANSAC for coarse alignment, ICP for refinement. |
 | **Meshroom (AliceVision)** | Not used | -- | Requires NVIDIA GPU for dense reconstruction. VGGT supersedes the need for any SfM pipeline. |
 | **OpenMVG + OpenMVS** | Not used | -- | Requires building from source. VGGT provides superior results in a single forward pass. |
+
+### Learned Floor Plan Detection (Primary)
+
+| Technology | Status | Role in This Project | Rationale |
+|:-----------|:------:|:---------------------|:----------|
+| **CAGE (NeurIPS 2025)** | **Used** | **Primary floor plan vectorization** | Edge-centric Transformer trained on Structured3D. Takes 256x256 density map from point cloud, predicts room polygons as edge sets. F1 99.1% rooms on benchmark. Runs on CPU/MPS via pure PyTorch deformable attention fallback. ResNet-50 backbone (~493MB checkpoint). |
+| **RoomFormer (CVPR 2023)** | Planned | Alternate learned detector | Predecessor to CAGE, predicts corners instead of edges. Same checkpoint format. Planned as a second option behind CAGE. |
+| **Hough Wall Detection** | **Used** | **Fallback when CAGE unavailable** | Custom pipeline: depth gradient + Canny + HoughLinesP + Manhattan alignment. Activated when `FLOORPLAN_FALLBACK_TO_HOUGH=True` and CAGE models are not installed. |
 
 ### Semantic Understanding & Detection
 
@@ -93,36 +101,40 @@ The following table evaluates every technology referenced in the [3D Room Recons
 ## How It Works
 
 ```
-                     PRIMARY PIPELINE (VGGT + Gemini)
+                     PRIMARY PIPELINE (VGGT + CAGE + Gemini)
 
-  Photos (4-5)                                          Output Formats
-  ============                                          ==============
+  Photos (4-12)                                         Output Formats
+  =============                                         ==============
 
   +-------+      +-----------+      +-----------+       +-- SVG (vector)
-  | img1  |----->|   VGGT    |----->|   Wall    |       +-- DXF (CAD)
-  | img2  |      | (single   |      | Detection |------>+-- PNG (arch.)
-  | img3  |      | forward   |      +-----------+       +-- 3D (Plotly)
-  | img4  |      | pass)     |            |             +-- PLY (mesh)
+  | img1  |----->|   VGGT    |----->|   CAGE    |       +-- DXF (CAD)
+  | img2  |      | (single   |      | Learned   |------>+-- PNG (arch.)
+  | img3  |      | forward   |      | Floor Plan|       +-- 3D (Plotly)
+  | img4  |      | pass)     |      | Detector  |       +-- PLY (mesh)
   +-------+      +-----------+      +-----------+       +-- HTML (3D)
-       |          Returns:          |   Room    |
-       |          - metric depth    | Segmenter |
-       |          - camera poses    +-----------+
-       |          - focal lengths         |
-       |          - point cloud     +-----------+
-       |                            |  Opening  |
-       |   (parallel)               | Detector  |
-       +--------->+-----------+     +-----------+
-                  | Gemini 3  |           |
-                  | Flash     |     +-----------+
-                  | (Vertex)  |     | Measure   |
-                  +-----------+     |  Engine   |
-                   Returns:         +-----------+
-                   - room type            |
-                   - doors/windows  +-----------+
-                   - room shape     | Renderers |-------> Files
+       |          Returns:          point cloud ->
+       |          - metric depth    256x256 density
+       |          - camera poses    map -> CAGE model
+       |          - focal lengths   -> room polygons
+       |          - point cloud           |
+       |                            +-----------+
+       |   (parallel)               |  Opening  |
+       +--------->+-----------+     | Detector  |
+                  | Gemini 3  |     +-----------+
+                  | Flash     |           |
+                  | (Vertex)  |     +-----------+
+                  +-----------+     | Measure   |
+                   Returns:         |  Engine   |
+                   - room type      +-----------+
+                   - doors/windows        |
+                   - room shape     +-----------+
+                                    | Renderers |-------> Files
                                     | SVG/DXF/  |
                                     | PNG/3D    |
                                     +-----------+
+
+  HOUGH FALLBACK (if CAGE weights not installed):
+  Point Cloud --> Hough Wall Detection --> Manhattan Alignment --> Room Segmentation
 
   LEGACY FALLBACK (if VGGT unavailable):
   Photos --> COLMAP SfM --> Depth Estimation --> TSDF/ICP Fusion --> ...
@@ -143,14 +155,16 @@ When VGGT is unavailable, the system falls back to the original pipeline:
 2. **COLMAP SfM** for camera pose estimation
 3. **TSDF Fusion** / **SfM Alignment** / **ICP/RANSAC** for point cloud fusion
 
-### Wall Detection & Room Segmentation
+### Learned Floor Plan Detection (CAGE)
 
-A custom pipeline extracts architectural structure from the point cloud:
+**CAGE** (NeurIPS 2025) is the primary wall detection backend:
 
-- **Depth gradient analysis** identifies wall boundaries
-- **Canny + HoughLinesP** detects wall line segments
-- **Manhattan-world alignment** snaps walls to orthogonal axes
-- **Room segmentation** extracts room polygons from wall topology
+1. **Point cloud -> density map**: XZ top-down projection with log normalization + Gaussian smoothing (256x256)
+2. **CAGE model inference**: Edge-centric Transformer predicts room polygons as sets of edges
+3. **Postprocessing**: Edge merging, corner extraction, polygon validation, IoU-based deduplication
+4. **FloorPlanModel**: Room polygons converted to metric coordinates with wall segments and room classification
+
+Falls back to **Hough-based wall detection** (depth gradient + Canny + HoughLinesP + Manhattan alignment) when CAGE weights are not installed.
 
 ### Door & Window Detection
 
@@ -193,9 +207,11 @@ cd missoula
 # Install VGGT from local clone
 uv pip install -e ../vggt
 
-# Install remaining dependencies
+# Install remaining dependencies (includes CAGE deps: timm, fvcore, shapely, etc.)
 uv pip install -r requirements.txt
 ```
+
+CAGE checkpoints are bundled in `external/cage/checkpoints/`. No separate download needed.
 
 ### Environment Setup (Gemini 3)
 
@@ -204,7 +220,7 @@ Gemini scene analysis requires Vertex AI credentials:
 ```bash
 export GOOGLE_GENAI_USE_VERTEXAI=1
 export GOOGLE_CLOUD_LOCATION="global"
-export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+export GOOGLE_CLOUD_PROJECT="adktalentpulse360"
 ```
 
 Gemini is optional -- the pipeline works without it, just without semantic labels (room type, door/window classification).
@@ -216,12 +232,12 @@ On first execution, models are downloaded automatically from Hugging Face:
 | Model | Size | Downloaded When |
 |:------|:-----|:----------------|
 | **VGGT-1B** | ~4 GB | Primary reconstruction (default) |
+| **CAGE ResNet-50** | ~493 MB | Bundled in `external/cage/checkpoints/` |
+| CAGE SwinV2-Large | ~2.55 GB | Optional, higher quality (same directory) |
 | Apple Depth Pro | ~1.5 GB | Legacy fallback (VGGT disabled) |
-| Depth-Anything-V2 Metric Indoor | ~1.3 GB | Depth Pro fails to load |
-| Intel DPT-Large | ~350 MB | All above fail |
 | SegFormer (ADE20K) | ~100 MB | Opening detection on first image |
 
-No manual download steps required. Subsequent runs use the Hugging Face cache.
+VGGT and SegFormer download from Hugging Face cache on first use. CAGE checkpoints are already in the repo.
 
 ### Run
 
@@ -230,25 +246,103 @@ No manual download steps required. Subsequent runs use the Hugging Face cache.
 uv run python app.py
 # Open http://localhost:7850
 
-# Command line
-uv run python run_cli.py sample_images/test_room_*.jpg
+# Command line with sample images
+uv run python run_cli.py sample_images/*.png --visualize
+
+# Command line with custom photos
 uv run python run_cli.py path/to/photos/*.jpg --room-width 5.0 --visualize
+```
+
+### Test the CAGE Pipeline Directly
+
+```bash
+# Quick smoke test: load CAGE model and run on synthetic data
+uv run python -c "
+from modules.detection.learned_floorplan_detector import LearnedFloorplanDetector
+import numpy as np
+
+detector = LearnedFloorplanDetector(model_type='cage')
+
+# Synthetic rectangular room: 5m x 4m, 2.5m tall
+rng = np.random.default_rng(42)
+pts = np.vstack([
+    rng.uniform([0, 0, 0], [5, 0.01, 4], (1000, 3)),     # floor
+    rng.uniform([0, 0, 0], [0.01, 2.5, 4], (1000, 3)),    # left wall
+    rng.uniform([4.99, 0, 0], [5, 2.5, 4], (1000, 3)),    # right wall
+    rng.uniform([0, 0, 0], [5, 2.5, 0.01], (1000, 3)),    # back wall
+    rng.uniform([0, 0, 3.99], [5, 2.5, 4], (1000, 3)),    # front wall
+]).astype(np.float32)
+
+result = detector.detect(pts, floor_height=0.0)
+model = result['floor_plan_model']
+print(f'Walls: {len(model.walls)}, Rooms: {len(model.rooms)}')
+for r in model.rooms:
+    print(f'  {r.name}: shape={r.room_shape}, corners={len(r.boundary)}')
+print(f'Closure: {result[\"quality_flags\"][\"closure_score\"]:.3f}')
+"
+```
+
+```bash
+# End-to-end test with real sample images (VGGT + CAGE)
+uv run python -c "
+import os, numpy as np
+from PIL import Image
+from modules.vggt_reconstructor import VGGTReconstructor
+from modules.detection.learned_floorplan_detector import LearnedFloorplanDetector
+from modules.rendering.svg_renderer import SVGRenderer
+from modules.rendering.png_renderer import PNGRenderer
+
+# Load 5 sample images
+imgs = sorted([f for f in os.listdir('sample_images') if f.endswith('.png')])[:5]
+images = [np.array(Image.open(os.path.join('sample_images', f))) for f in imgs]
+print(f'Loaded {len(images)} images')
+
+# VGGT reconstruction
+vggt = VGGTReconstructor()
+result = vggt.reconstruct(images)
+pts = result['point_cloud']
+pts = pts[np.isfinite(pts).all(axis=1)]
+print(f'Point cloud: {pts.shape[0]} points')
+
+# CAGE floor plan detection
+detector = LearnedFloorplanDetector(model_type='cage')
+fp = detector.detect(pts)
+model = fp['floor_plan_model']
+print(f'Walls: {len(model.walls)}, Rooms: {len(model.rooms)}')
+
+# Render outputs
+os.makedirs('outputs', exist_ok=True)
+SVGRenderer().render(model, 'outputs/cage_floorplan.svg')
+fig = PNGRenderer().render(model, 'outputs/cage_floorplan.png')
+fig.savefig('outputs/cage_floorplan.png', dpi=150, bbox_inches='tight')
+print('Floor plan saved to outputs/cage_floorplan.svg and outputs/cage_floorplan.png')
+"
 ```
 
 ### Run Tests
 
 ```bash
-uv run python -m pytest tests/ -v
+# All fast tests (no model loading, synthetic data)
+uv run pytest tests/ -v
+
+# Only learned floor plan detection tests
+uv run pytest tests/test_learned_floorplan_detection.py -v
+
+# Slow tests (require CAGE weights + sample images)
+uv run pytest tests/ -m slow -v
 ```
 
 | Test Suite | Tests | Coverage |
 |:-----------|------:|:---------|
+| `test_learned_floorplan_detection.py` | 19 | Density map projection, polygon conversion, wall dedup, closure, room types |
 | `test_phase1_metric_depth.py` | 8 | Metric depth estimation, calibration |
 | `test_phase2_wall_detection.py` | 9 | Wall detection, room segmentation, measurement |
-| `test_phase3_rendering.py` | 24 | SVG, DXF, PNG renderers, symbol library |
+| `test_phase3_rendering.py` | 27 | SVG, DXF, PNG renderers, symbol library |
 | `test_phase4_openings.py` | 14 | Opening detection, projection, rendering integration |
+| `test_phase5_quality_scoring.py` | 7 | Quality assessment, export policies |
+| `test_phase9_regression_pack.py` | 1 | Regression test against 9-sample baseline |
 | `test_e2e.py` | 6 | Full pipeline lifecycle, all module imports |
-| **Total** | **61** | |
+| **Total** | **123+** | |
 
 ---
 
@@ -330,26 +424,30 @@ VGGT_MODEL = "facebook/VGGT-1B"         # CVPR 2025 Best Paper
 VGGT_CONFIDENCE_THRESHOLD = 0.5          # Point cloud confidence filter
 VGGT_MAX_SIZE = 518                      # Input image max dimension
 
+# CAGE learned floor plan detection (primary wall detection)
+ENABLE_LEARNED_FLOORPLAN = True          # True = CAGE, False = Hough only
+LEARNED_FLOORPLAN_MODEL = "cage"         # "cage" or "roomformer" (future)
+CAGE_MODEL_PATH = "external/cage/checkpoints"  # Checkpoint directory
+FLOORPLAN_DENSITY_RESOLUTION = 256       # Density map size for CAGE
+FLOORPLAN_CONFIDENCE_THRESHOLD = 0.5     # Edge confidence threshold
+FLOORPLAN_FALLBACK_TO_HOUGH = True       # Fall back to Hough if CAGE fails
+
 # Gemini scene analysis
 ENABLE_GEMINI_ANALYSIS = True            # True = Gemini semantic analysis
-GEMINI_MODEL = "gemini-3-flash-preview"          # Vertex AI model
+GEMINI_MODEL = "gemini-3-flash-preview"  # Vertex AI model
 GEMINI_TIMEOUT = 30                      # Seconds to wait for Gemini
 
 # Legacy depth estimation (used when VGGT disabled)
 ENABLE_METRIC_DEPTH = True               # True = metric, False = relative
 METRIC_DEPTH_MODEL = "apple/DepthPro-hf" # Primary metric model
 
-# Legacy SfM (used when VGGT disabled)
-ENABLE_SFM = True                        # COLMAP SfM for multi-view alignment
-SFM_MIN_IMAGES = 3                       # Minimum images for SfM
-
 # 3D reconstruction
 POINT_CLOUD_DENSITY = 4                  # Sample every Nth pixel
 VOXEL_SIZE = 0.05                        # Voxel downsampling (meters)
 
-# Floor plan
+# Floor plan (legacy Hough path only)
 ASSUMED_ROOM_WIDTH_METERS = 4.0          # Default room width (legacy only)
-FLOOR_PLAN_RESOLUTION = 100              # Grid resolution
+FLOOR_PLAN_RESOLUTION = 100              # Grid resolution (Hough path)
 ```
 
 ---
@@ -359,15 +457,16 @@ FLOOR_PLAN_RESOLUTION = 100              # Grid resolution
 ```
 missoula/
 |
-|-- app.py                          # Gradio web UI (entry point)
+|-- app.py                          # Gradio web UI (entry point, port 7850)
 |-- run_cli.py                      # CLI entry point
-|-- config.py                       # All configurable parameters
+|-- config.py                       # All configurable parameters + feature flags
 |-- requirements.txt                # Python dependencies
+|-- pytest.ini                      # Test configuration
 |
 |-- modules/
-|   |-- room_reconstructor.py       # Main orchestrator (VGGT + Gemini + legacy)
-|   |-- vggt_reconstructor.py       # VGGT-1B single-pass reconstruction (NEW)
-|   |-- scene_analyzer.py           # Gemini 3 scene analysis (NEW)
+|   |-- room_reconstructor.py       # Main orchestrator (VGGT + CAGE + Gemini + legacy)
+|   |-- vggt_reconstructor.py       # VGGT-1B single-pass reconstruction
+|   |-- scene_analyzer.py           # Gemini 3 scene analysis (Vertex AI)
 |   |-- depth_estimator.py          # Depth-Anything-V2 / DPT (legacy fallback)
 |   |-- sfm_processor.py            # COLMAP SfM (legacy fallback)
 |   |-- dense_reconstructor.py      # TSDF volumetric fusion
@@ -379,7 +478,9 @@ missoula/
 |   |   |-- depth_calibrator.py     # Cross-model calibration
 |   |
 |   |-- detection/
-|   |   |-- wall_detector.py        # Depth gradient + Hough wall detection
+|   |   |-- learned_floorplan_detector.py  # CAGE/RoomFormer learned detection (PRIMARY)
+|   |   |-- cage_loader.py          # CAGE model loading with CPU/MPS compatibility
+|   |   |-- wall_detector.py        # Hough wall detection (fallback)
 |   |   |-- room_segmenter.py       # Room polygon extraction
 |   |   |-- opening_detector.py     # SegFormer door/window detection
 |   |
@@ -388,23 +489,29 @@ missoula/
 |   |   |-- measurement_engine.py   # Per-wall lengths, areas, chain dims
 |   |
 |   |-- rendering/
-|       |-- svg_renderer.py         # SVG vector floor plan (sliding doors)
+|       |-- svg_renderer.py         # SVG vector floor plan
 |       |-- dxf_renderer.py         # DXF/CAD export (AIA layers)
-|       |-- png_renderer.py         # Matplotlib architectural PNG (sliding doors)
-|       |-- symbol_library.py       # Door arcs, sliding doors, windows, scale bar
+|       |-- png_renderer.py         # Matplotlib architectural PNG
+|       |-- symbol_library.py       # Door arcs, windows, scale bar, north arrow
+|
+|-- external/
+|   |-- cage/                       # CAGE repo (NeurIPS 2025) - cloned
+|       |-- models/                 # RoomFormer + deformable transformer
+|       |-- checkpoints/            # CAGE_stru3d_resnet50.pth (~493MB)
+|       |-- util/                   # Postprocessing (edge_utils, misc)
 |
 |-- tests/
-|   |-- test_phase1_metric_depth.py
-|   |-- test_phase2_wall_detection.py
-|   |-- test_phase3_rendering.py
-|   |-- test_phase4_openings.py
-|   |-- test_e2e.py
+|   |-- test_learned_floorplan_detection.py  # 19 tests: CAGE density map, polygons, walls
+|   |-- test_phase1_metric_depth.py          # 8 tests
+|   |-- test_phase2_wall_detection.py        # 9 tests
+|   |-- test_phase3_rendering.py             # 27 tests
+|   |-- test_phase4_openings.py              # 14 tests
+|   |-- test_phase5_quality_scoring.py       # 7 tests
+|   |-- test_phase9_regression_pack.py       # 1 regression test
+|   |-- test_e2e.py                          # 6 tests
 |
-|-- sample_images/                  # 9 sample room photos
+|-- sample_images/                  # 12 room photos (same room, different angles)
 |-- outputs/                        # Generated floor plans, 3D models
-|-- ARCHITECTURE.md                 # Detailed architecture documentation
-|-- IMPLEMENTATION_PLAN.md          # 37-step implementation roadmap
-|-- FLOOR_PLAN_REVIEW.md            # Improvement roadmap
 ```
 
 ---
@@ -477,25 +584,47 @@ The **Calibrate Measurements** panel allows post-hoc correction using a known wa
 | **google-genai** | 1.0+ | Gemini 3 Flash via Vertex AI |
 | **PyTorch** | 2.0+ | Deep learning inference runtime |
 | **Transformers** | 4.35+ | Hugging Face model loading (depth, segmentation) |
+| **timm** | 0.9+ | CAGE backbone (SwinV2, ResNet) |
+| **fvcore** | 0.1+ | CAGE model building utilities |
+| **fairscale** | 0.4+ | CAGE checkpoint loading |
 | **einops** | 0.8+ | Tensor operations (VGGT dependency) |
 | **Open3D** | 0.17+ | Point cloud processing, TSDF, ICP, filtering |
-| **pycolmap** | 0.6+ | COLMAP SfM (legacy fallback) |
 | **OpenCV** | 4.8+ | Image processing, edge detection, Hough transforms |
 | **svgwrite** | 1.4+ | SVG floor plan generation |
 | **ezdxf** | 1.0+ | DXF/CAD file generation |
 | **Plotly** | 5.15+ | Interactive 3D visualization |
 | **Matplotlib** | 3.7+ | Architectural PNG rendering |
 | **Gradio** | 4.0+ | Web interface |
-| **scikit-image** | 0.21+ | Image analysis, morphology |
-| **SciPy** | 1.10+ | Spatial processing, interpolation |
-| **Shapely** | 2.0+ | Computational geometry |
-| **trimesh** | 4.0+ | Mesh utilities |
+| **SciPy** | 1.10+ | Spatial processing, Gaussian filtering |
+| **Shapely** | 2.0+ | Computational geometry (CAGE polygon ops) |
 
 Install VGGT separately: `uv pip install -e ../vggt`, then `uv pip install -r requirements.txt`.
 
 ---
 
 ## Troubleshooting
+
+### CAGE Not Detecting Rooms
+
+CAGE requires a clear density map with visible wall patterns. If detection fails:
+
+```python
+# In config.py -- adjust confidence threshold:
+FLOORPLAN_CONFIDENCE_THRESHOLD = 0.3     # Lower = more permissive (default 0.5)
+
+# Disable CAGE and use Hough fallback:
+ENABLE_LEARNED_FLOORPLAN = False
+
+# Or keep CAGE with fallback:
+FLOORPLAN_FALLBACK_TO_HOUGH = True       # Falls back to Hough if CAGE finds 0 rooms
+```
+
+If CAGE checkpoints are missing, download them:
+```bash
+# ResNet-50 backbone (493MB, recommended)
+# Download from: https://drive.google.com/file/d/1FeO-1IjJfCt8aP-PNhKVuMK-VE9B3pYZ
+# Place at: external/cage/checkpoints/CAGE_checkpoints/CAGE_stru3d_resnet50.pth
+```
 
 ### VGGT Out of Memory
 
@@ -576,9 +705,11 @@ pycolmap's native library may crash with `SIGABRT` on some macOS configurations.
 ### Known Limitations
 
 - VGGT model is ~4 GB and requires GPU (CUDA or MPS) for reasonable inference speed
-- Gemini requires Google Cloud credentials and Vertex AI access
-- Floor plan grid resolution is 100x100 -- coarse for large rooms
-- Convex hull boundary cannot fully represent non-convex room shapes
+- CAGE checkpoint is ~493 MB (ResNet-50) or ~2.55 GB (SwinV2-Large)
+- CAGE runs on CPU/MPS via pure PyTorch deformable attention (slower than CUDA but functional)
+- VGGT metric scale may need calibration for absolute room dimensions
+- CAGE may split a single room into multiple polygons on noisy/partial point clouds
+- Gemini requires Google Cloud credentials and Vertex AI access (`GOOGLE_CLOUD_LOCATION="global"`)
 - Gemini door/window placement is approximate (positioned at 25%/50%/75% along walls)
 - Scale accuracy depends on depth model quality; not suitable for construction or legal purposes
 
@@ -603,17 +734,18 @@ pycolmap's native library may crash with `SIGABRT` on some macOS configurations.
 | Phase 5: Integration & UI | Complete | Gradio UI with format tabs, calibration, measurements |
 | **Phase 6: VGGT Integration** | **Complete** | **VGGT-1B single-pass reconstruction replaces SfM + depth + registration** |
 | **Phase 7: Gemini Integration** | **Complete** | **Gemini 3 Flash semantic analysis (room type, doors, windows) in parallel** |
-| Phase 8: NeRF / Gaussian Splatting | Planned | Photorealistic visualization layer |
-| Phase 9: Furniture Detection | Planned | Object detection and placement in floor plans |
-| Phase 10: Multi-Room Support | Planned | Connected room topology and navigation |
-
-See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the detailed 37-step breakdown and [FLOOR_PLAN_REVIEW.md](FLOOR_PLAN_REVIEW.md) for the 10-week improvement roadmap.
+| **Phase 8: CAGE Learned Detection** | **Complete** | **CAGE (NeurIPS 2025) replaces Hough wall detection. CPU/MPS compatible.** |
+| Phase 9: Scale Calibration | In Progress | VGGT metric scale alignment with known room dimensions |
+| Phase 10: NeRF / Gaussian Splatting | Planned | Photorealistic visualization layer |
+| Phase 11: Multi-Room Support | Planned | Connected room topology and navigation |
 
 ---
 
 ## Acknowledgments
 
 - **Meta Research** -- VGGT (Visual Geometry Grounded Transformer, CVPR 2025 Best Paper)
+- **CAGE Authors** -- CAGE edge-centric Transformer for floor plan vectorization (NeurIPS 2025)
+- **RoomFormer Authors** -- RoomFormer corner-based floor plan detection (CVPR 2023)
 - **Google** -- Gemini 3 Flash multimodal model via Vertex AI
 - **Apple** -- Depth Pro metric depth estimation model
 - **Hugging Face** -- Model hosting and Transformers library

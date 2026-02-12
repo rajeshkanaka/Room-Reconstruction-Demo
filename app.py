@@ -514,7 +514,8 @@ def main():
     print("Models will be loaded on first image processing.\n")
 
     demo = create_demo_interface()
-    demo.launch(server_name="0.0.0.0", server_port=7850, share=False, show_error=True)
+    share = os.environ.get("GRADIO_SHARE", "false").lower() == "true"
+    demo.launch(server_name="0.0.0.0", server_port=7850, share=share, show_error=True)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,8 @@ from config import (
     VGGT_CONFIDENCE_THRESHOLD,
     ENABLE_GEMINI_ANALYSIS,
     GEMINI_TIMEOUT,
+    ENABLE_LEARNED_FLOORPLAN,
+    FLOORPLAN_FALLBACK_TO_HOUGH,
 )
 from modules.depth_estimator import DepthEstimator
 from modules.visualizer_3d import Visualizer3D
@@ -173,6 +175,29 @@ class RoomReconstructor:
         self.wall_detector = WallDetector()
         self.room_segmenter = RoomSegmenter()
         self.measurement_engine = MeasurementEngine()
+
+        # Learned floor plan detection (CAGE / RoomFormer)
+        self.learned_floorplan_detector = None
+        if ENABLE_LEARNED_FLOORPLAN:
+            try:
+                from modules.detection.learned_floorplan_detector import (
+                    LearnedFloorplanDetector,
+                )
+
+                self.learned_floorplan_detector = LearnedFloorplanDetector()
+                print(
+                    colored(
+                        "[RoomReconstructor] Learned floor plan detection enabled",
+                        "green",
+                    )
+                )
+            except Exception as e:
+                print(
+                    colored(
+                        f"[RoomReconstructor] Learned floor plan detector unavailable: {e}",
+                        "yellow",
+                    )
+                )
 
         # Opening detection (door/window)
         self.opening_detector = None
@@ -333,7 +358,9 @@ class RoomReconstructor:
         r = np.eye(3, dtype=np.float64) + vx + (vx @ vx) * ((1.0 - c) / (s * s + 1e-12))
         return r
 
-    def _estimate_up_axis_from_poses(self, camera_poses: Optional[Dict]) -> Optional[np.ndarray]:
+    def _estimate_up_axis_from_poses(
+        self, camera_poses: Optional[Dict]
+    ) -> Optional[np.ndarray]:
         """
         Estimate world up-axis from camera poses.
 
@@ -762,7 +789,9 @@ class RoomReconstructor:
         return float(max(0.0, hi - lo))
 
     @staticmethod
-    def _point_line_distance(point: np.ndarray, line: Tuple[np.ndarray, np.ndarray]) -> float:
+    def _point_line_distance(
+        point: np.ndarray, line: Tuple[np.ndarray, np.ndarray]
+    ) -> float:
         """Perpendicular distance from point to infinite line."""
         a, b = line
         ab = b - a
@@ -910,7 +939,9 @@ class RoomReconstructor:
                     "avg_support_views": float(np.mean(support_counts))
                     if support_counts
                     else 0.0,
-                    "max_support_views": int(max(support_counts)) if support_counts else 0,
+                    "max_support_views": int(max(support_counts))
+                    if support_counts
+                    else 0,
                 }
             )
             return segments, stats
@@ -990,7 +1021,11 @@ class RoomReconstructor:
         if len(boundary) == 4:
             return rooms
 
-        fit_points = floor_points_2d if floor_points_2d is not None and len(floor_points_2d) > 0 else boundary
+        fit_points = (
+            floor_points_2d
+            if floor_points_2d is not None and len(floor_points_2d) > 0
+            else boundary
+        )
         if fit_points is None or len(fit_points) < 20:
             dense = []
             n = len(boundary)
@@ -1084,7 +1119,9 @@ class RoomReconstructor:
             all_pts.append(wall.end)
         if all_pts:
             all_pts = np.array(all_pts, dtype=np.float64)
-            shift = np.array([max(0.0, -all_pts[:, 0].min()), max(0.0, -all_pts[:, 1].min())])
+            shift = np.array(
+                [max(0.0, -all_pts[:, 0].min()), max(0.0, -all_pts[:, 1].min())]
+            )
             if np.linalg.norm(shift) > 0:
                 for wall in model.walls:
                     wall.start = wall.start + shift
@@ -1107,18 +1144,21 @@ class RoomReconstructor:
         images: List[np.ndarray],
         camera_intrinsics: Optional[Dict] = None,
         camera_poses: Optional[Dict] = None,
+        dense_points: Optional[np.ndarray] = None,
     ) -> Optional[Dict]:
         """
         Run the wall detection + room segmentation pipeline.
 
         Args:
-            points: Nx3 point cloud (calibrated)
+            points: Nx3 point cloud (calibrated, postprocessed)
             depth_maps: Per-image depth maps (calibrated)
             images: Original RGB images
             camera_intrinsics: Optional dict of per-camera intrinsics from
                 VGGT or SfM.  Keys are image indices, values have "fx", "fy".
             camera_poses: Optional dict of per-camera 4x4 world-from-camera
                 transforms.  Keys are image indices, values have "transform".
+            dense_points: Optional Nx3 raw point cloud before postprocessing.
+                Used by learned models (CAGE) for denser density maps.
 
         Returns a FloorPlanModel dict, or None if detection fails.
         """
@@ -1138,6 +1178,90 @@ class RoomReconstructor:
                 "closure_unpaired_ratio": 1.0,
             }
 
+            # --- Learned floor plan detection (CAGE / RoomFormer) ---
+            # Try the learned model first; falls back to Hough if it fails.
+            # Use dense (pre-downsampled) points for richer density map.
+            if self.learned_floorplan_detector is not None:
+                cage_points = dense_points if dense_points is not None else points
+                try:
+                    learned_result = self.learned_floorplan_detector.detect(cage_points)
+                    if learned_result is not None:
+                        learned_model = learned_result["floor_plan_model"]
+                        # Enrich with opening detection if available
+                        if self.opening_detector is not None and images and depth_maps:
+                            try:
+                                if (
+                                    self.use_metric_depth
+                                    and self.metric_depth_estimator is not None
+                                ):
+                                    fx = self.metric_depth_estimator.get_focal_length(
+                                        images[0].shape[1]
+                                    )
+                                else:
+                                    fx = CAMERA_FX
+                                (
+                                    doors,
+                                    windows,
+                                ) = self.opening_detector.detect_and_project(
+                                    images,
+                                    depth_maps,
+                                    learned_model.walls,
+                                    fx=fx,
+                                    fy=fx,
+                                    camera_intrinsics=camera_intrinsics,
+                                    camera_poses=camera_poses,
+                                )
+                                learned_model.doors.extend(doors)
+                                learned_model.windows.extend(windows)
+                            except Exception as e:
+                                print(
+                                    colored(
+                                        f"[RoomReconstructor] Opening detection on learned model failed: {e}",
+                                        "yellow",
+                                    )
+                                )
+
+                        learned_model = self._normalize_model_orientation(learned_model)
+                        measurements = self.measurement_engine.compute_measurements(
+                            learned_model
+                        )
+                        print(
+                            colored(
+                                f"[RoomReconstructor] Learned model: "
+                                f"{len(learned_model.walls)} walls, "
+                                f"{len(learned_model.rooms)} rooms, "
+                                f"{len(learned_model.doors)} doors, "
+                                f"{len(learned_model.windows)} windows",
+                                "green",
+                            )
+                        )
+                        return {
+                            "floor_plan_model": learned_model,
+                            "measurements": measurements,
+                            "quality_flags": learned_result.get(
+                                "quality_flags", quality_flags
+                            ),
+                        }
+                except NotImplementedError:
+                    # Model weights not installed yet -- expected during development
+                    print(
+                        colored(
+                            "[RoomReconstructor] Learned model not installed, "
+                            "falling back to Hough pipeline",
+                            "yellow",
+                        )
+                    )
+                except Exception as e:
+                    print(
+                        colored(
+                            f"[RoomReconstructor] Learned detection failed: {e}",
+                            "yellow",
+                        )
+                    )
+                    if not FLOORPLAN_FALLBACK_TO_HOUGH:
+                        return None
+
+            # --- Legacy Hough-based wall detection pipeline ---
             # 1. Detect floor plane
             plane, floor_inliers = self.wall_detector.detect_floor_plane(
                 points, up_axis=np.array([0.0, 1.0, 0.0], dtype=np.float64)
@@ -1174,9 +1298,12 @@ class RoomReconstructor:
                         cx = float(intr.get("cx", depth.shape[1] / 2.0))
                         cy = float(intr.get("cy", depth.shape[0] / 2.0))
                     elif (
-                        self.use_metric_depth and self.metric_depth_estimator is not None
+                        self.use_metric_depth
+                        and self.metric_depth_estimator is not None
                     ):
-                        fx = self.metric_depth_estimator.get_focal_length(depth.shape[1])
+                        fx = self.metric_depth_estimator.get_focal_length(
+                            depth.shape[1]
+                        )
                         fy = fx
                         cx = depth.shape[1] / 2.0
                         cy = depth.shape[0] / 2.0
@@ -1228,7 +1355,9 @@ class RoomReconstructor:
                             ):
                                 continue
 
-                        start_2d = np.array([p1_world[0], p1_world[2]], dtype=np.float64)
+                        start_2d = np.array(
+                            [p1_world[0], p1_world[2]], dtype=np.float64
+                        )
                         end_2d = np.array([p2_world[0], p2_world[2]], dtype=np.float64)
                         if np.linalg.norm(end_2d - start_2d) < 0.2:
                             continue
@@ -1360,7 +1489,9 @@ class RoomReconstructor:
                     fallback_points = (
                         floor_points_2d
                         if floor_points_2d is not None and len(floor_points_2d) > 0
-                        else np.array([pt for seg in aligned for pt in seg], dtype=np.float64)
+                        else np.array(
+                            [pt for seg in aligned for pt in seg], dtype=np.float64
+                        )
                     )
                     fallback_room = self.room_segmenter.points_to_rectangular_room(
                         fallback_points,
@@ -1368,7 +1499,9 @@ class RoomReconstructor:
                     )
                     if fallback_room is not None:
                         rooms = [fallback_room]
-                        wall_segments = self.room_segmenter.rooms_to_wall_segments(rooms)
+                        wall_segments = self.room_segmenter.rooms_to_wall_segments(
+                            rooms
+                        )
                         quality_flags["used_rectangular_fallback"] = True
                         print(
                             colored(
@@ -1402,7 +1535,9 @@ class RoomReconstructor:
                         and self.metric_depth_estimator is not None
                         and images
                     ):
-                        fx = self.metric_depth_estimator.get_focal_length(images[0].shape[1])
+                        fx = self.metric_depth_estimator.get_focal_length(
+                            images[0].shape[1]
+                        )
                     else:
                         fx = CAMERA_FX
                     doors, windows = self.opening_detector.detect_and_project(
@@ -1414,7 +1549,9 @@ class RoomReconstructor:
                         camera_intrinsics=camera_intrinsics,
                         camera_poses=camera_poses,
                     )
-                    fusion_stats = getattr(self.opening_detector, "last_fusion_stats", {})
+                    fusion_stats = getattr(
+                        self.opening_detector, "last_fusion_stats", {}
+                    )
                     if fusion_stats:
                         quality_flags["opening_fusion"] = fusion_stats
                 except Exception as e:
@@ -1738,6 +1875,8 @@ class RoomReconstructor:
                 return None
 
             raw_count = len(combined_points)
+            # Keep dense points before downsampling for CAGE density map
+            dense_points_raw = combined_points.copy()
 
             # Post-process (denoise + downsample)
             combined_points, combined_colors = self._postprocess_point_cloud(
@@ -1758,6 +1897,8 @@ class RoomReconstructor:
                 camera_poses=vggt_result.get("camera_poses"),
                 relative_scale_required=True,
             )
+            # Apply the same scale to dense points
+            dense_points_scaled = dense_points_raw * scale_factor
 
             # Scale depth maps and camera translations by the same factor
             depth_maps_calibrated = []
@@ -1774,6 +1915,10 @@ class RoomReconstructor:
             # Canonicalize frame so vertical aligns with +Y for downstream geometry.
             combined_points, calibrated_poses = self._canonicalize_world_frame(
                 combined_points, calibrated_poses
+            )
+            # Apply same canonicalization to dense points
+            dense_points_scaled, _ = self._canonicalize_world_frame(
+                dense_points_scaled, None
             )
 
             print(
@@ -1798,6 +1943,7 @@ class RoomReconstructor:
                 "all_depths": depth_maps_calibrated,
                 "sfm_result": sfm_result,
                 "raw_count": raw_count,
+                "dense_points": dense_points_scaled,
                 "camera_intrinsics": vggt_result["camera_intrinsics"],
                 "input_images": input_images,
                 "selected_indices": selected_indices,
@@ -2073,7 +2219,9 @@ class RoomReconstructor:
         wall_count = len(model.walls)
         room_count = len(model.rooms)
         area_sqm = float(measurements.get("area_sqm", 0.0))
-        detection_warnings = detection_result.get("measurements", {}).get("warnings", [])
+        detection_warnings = detection_result.get("measurements", {}).get(
+            "warnings", []
+        )
         quality_flags = detection_result.get("quality_flags", {})
         opening_fusion = quality_flags.get("opening_fusion", {})
         wall_support = quality_flags.get("wall_multiview_support", {})
@@ -2113,11 +2261,15 @@ class RoomReconstructor:
 
         if quality_flags.get("used_sparse_wall_fallback"):
             score -= 0.1
-            warnings.append("Used sparse-wall fallback because wall extraction was weak.")
+            warnings.append(
+                "Used sparse-wall fallback because wall extraction was weak."
+            )
 
         if closure_score < 0.65:
             score -= 0.12
-            warnings.append("Wall graph closure is weak; corner connectivity is unstable.")
+            warnings.append(
+                "Wall graph closure is weak; corner connectivity is unstable."
+            )
         elif closure_score < 0.82:
             score -= 0.05
             warnings.append("Wall closure is moderate; verify dimensions manually.")
@@ -2141,7 +2293,9 @@ class RoomReconstructor:
                 warnings.append("Wall geometry has limited multi-view support.")
             if dropped_segments > 0 and retained_ratio < 0.7:
                 score -= 0.05
-                warnings.append("Many wall segments were rejected as cross-view inconsistent.")
+                warnings.append(
+                    "Many wall segments were rejected as cross-view inconsistent."
+                )
 
         raw_opening_obs = int(
             opening_fusion.get("raw_door_observations", 0)
@@ -2155,7 +2309,9 @@ class RoomReconstructor:
 
         if raw_opening_obs > 0 and fused_openings == 0:
             score -= 0.08
-            warnings.append("Openings detected but not geometrically stable across views.")
+            warnings.append(
+                "Openings detected but not geometrically stable across views."
+            )
         elif fused_openings > 0 and max_support_views < 2:
             score -= 0.05
             warnings.append("Openings rely on single-view evidence.")
@@ -2403,10 +2559,11 @@ class RoomReconstructor:
                         pose = pose_data.get("transform")
                         if pose is not None and pose.shape == (4, 4):
                             pose[:3, 3] *= scale_factor
-                combined_points, sfm_result["camera_poses"] = (
-                    self._canonicalize_world_frame(
-                        combined_points, sfm_result.get("camera_poses")
-                    )
+                (
+                    combined_points,
+                    sfm_result["camera_poses"],
+                ) = self._canonicalize_world_frame(
+                    combined_points, sfm_result.get("camera_poses")
                 )
 
         print(
@@ -2431,6 +2588,7 @@ class RoomReconstructor:
         detection_images = (
             vggt_data.get("input_images", images) if vggt_data else images
         )
+        dense_pts = vggt_data.get("dense_points") if vggt_data else None
         if self.use_metric_depth or vggt_data is not None:
             detection_result = self._detect_walls_and_rooms(
                 combined_points,
@@ -2438,6 +2596,7 @@ class RoomReconstructor:
                 detection_images,
                 camera_intrinsics=vggt_intrinsics,
                 camera_poses=vggt_poses,
+                dense_points=dense_pts,
             )
 
         # Collect Gemini result and merge
@@ -2760,10 +2919,11 @@ class RoomReconstructor:
                         pose = pose_data.get("transform")
                         if pose is not None and pose.shape == (4, 4):
                             pose[:3, 3] *= scale_factor
-                combined_points, sfm_result["camera_poses"] = (
-                    self._canonicalize_world_frame(
-                        combined_points, sfm_result.get("camera_poses")
-                    )
+                (
+                    combined_points,
+                    sfm_result["camera_poses"],
+                ) = self._canonicalize_world_frame(
+                    combined_points, sfm_result.get("camera_poses")
                 )
 
         # Run new wall detection pipeline
@@ -2781,6 +2941,7 @@ class RoomReconstructor:
         detection_images = (
             vggt_data.get("input_images", valid_images) if vggt_data else valid_images
         )
+        dense_pts2 = vggt_data.get("dense_points") if vggt_data else None
         if self.use_metric_depth or vggt_data is not None:
             detection_result = self._detect_walls_and_rooms(
                 combined_points,
@@ -2788,6 +2949,7 @@ class RoomReconstructor:
                 detection_images,
                 camera_intrinsics=vggt_intrinsics,
                 camera_poses=vggt_poses,
+                dense_points=dense_pts2,
             )
 
         # Collect Gemini result and merge

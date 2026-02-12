@@ -336,6 +336,11 @@ class PNGRenderer:
         text = f"{float(dim.value_m):.2f}m ({value_ft:.1f}ft)"
 
         angle = np.degrees(np.arctan2(dy, dx))
+        # Keep text readable: flip if angle would render upside-down
+        if angle > 90:
+            angle -= 180
+        elif angle < -90:
+            angle += 180
         ax.text(
             mid_x,
             mid_y,

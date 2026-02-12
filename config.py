@@ -83,6 +83,17 @@ VGGT_MODEL = "facebook/VGGT-1B"
 VGGT_CONFIDENCE_THRESHOLD = 0.5
 VGGT_MAX_SIZE = 518
 
+# --- Learned Floor Plan Detection Settings ---
+# Replaces Hough-transform wall detection with CAGE (NeurIPS 2025) or RoomFormer (CVPR 2023).
+# Both take a top-down density map from VGGT point cloud and output vectorized room polygons.
+ENABLE_LEARNED_FLOORPLAN = True  # Use learned model for wall/room detection
+LEARNED_FLOORPLAN_MODEL = "cage"  # "cage" (primary) or "roomformer" (fallback)
+CAGE_MODEL_PATH = os.path.join(BASE_DIR, "external", "cage", "checkpoints")
+ROOMFORMER_MODEL_PATH = os.path.join(BASE_DIR, "external", "roomformer", "checkpoints")
+FLOORPLAN_DENSITY_RESOLUTION = 256  # Density map resolution for learned models
+FLOORPLAN_CONFIDENCE_THRESHOLD = 0.3  # Min polygon confidence to accept
+FLOORPLAN_FALLBACK_TO_HOUGH = True  # Fall back to Hough if learned model fails
+
 # --- Gemini Scene Analysis Settings ---
 ENABLE_GEMINI_ANALYSIS = True
 GEMINI_MODEL = "gemini-3-flash-preview"

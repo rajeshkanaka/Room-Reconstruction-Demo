@@ -24,7 +24,7 @@ uv run python app.py
 # Run CLI
 uv run python run_cli.py sample_images/*.jpeg --room-width 5.0 --visualize
 
-# Tests (61 tests across 7 suites, pytest)
+# Tests (91+ tests across 8 suites, pytest)
 uv run pytest                                    # All tests (excludes @slow by default)
 uv run pytest tests/test_phase3_rendering.py     # Single test file
 uv run pytest tests/test_e2e.py::TestFullPipeline::test_floor_plan_model_full_lifecycle  # Single test
@@ -36,7 +36,9 @@ First run downloads VGGT-1B model (~4GB) from Hugging Face automatically. No lin
 
 ## Architecture
 
-**Primary Pipeline:** Photos -> VGGT (metric depth + camera poses + point cloud) || Gemini 3 (semantic analysis) -> Wall detection -> Floor plan + 3D visualization
+**Primary Pipeline:** Photos -> VGGT (metric depth + camera poses + point cloud) || Gemini 3 (semantic analysis) -> Learned floor plan detection (CAGE/RoomFormer) -> Floor plan + 3D visualization
+
+**Hough Fallback:** Photos -> VGGT -> Point cloud -> Hough wall detection -> Manhattan alignment -> Room segmentation (used when learned models are not installed)
 
 **Legacy Fallback:** Photos -> SfM (COLMAP) -> Depth estimation (per image) -> Multi-view fusion -> Floor plan
 
@@ -62,7 +64,8 @@ First run downloads VGGT-1B model (~4GB) from Hugging Face automatically. No lin
 | `depth/depth_calibrator.py` | `DepthCalibrator` | Cross-model depth calibration and scale alignment. |
 | `sfm_processor.py` | `SfMProcessor` | **Legacy.** COLMAP SfM via pycolmap. |
 | `dense_reconstructor.py` | `DenseReconstructor` | TSDF volumetric fusion with SfM poses (Open3D). |
-| `detection/wall_detector.py` | `WallDetector` | Depth gradient -> Canny -> HoughLinesP -> Manhattan alignment. |
+| `detection/learned_floorplan_detector.py` | `LearnedFloorplanDetector` | **Primary.** CAGE (NeurIPS 2025) or RoomFormer (CVPR 2023). Point cloud -> 256x256 density map -> vectorized room polygons. Falls back to Hough if models not installed. |
+| `detection/wall_detector.py` | `WallDetector` | **Hough fallback.** Depth gradient -> Canny -> HoughLinesP -> Manhattan alignment. |
 | `detection/room_segmenter.py` | `RoomSegmenter` | Wall topology graph -> closed polygon extraction -> room shape classification. |
 | `detection/opening_detector.py` | `OpeningDetector` | SegFormer (ADE20K, door=class 25, window=class 8) + Hough fallback. Projects openings onto walls. |
 | `geometry/floor_plan_model.py` | `FloorPlanModel` | Central data model: `WallSegment`, `DoorOpening` (door_type, source), `WindowOpening` (sill_height, source), `RoomPolygon` (room_type, room_shape), `DimensionLine`. |
@@ -74,7 +77,7 @@ First run downloads VGGT-1B model (~4GB) from Hugging Face automatically. No lin
 | `visualizer_3d.py` | `Visualizer3D` | Plotly 3D scatter, Open3D viewer, PLY export, Poisson mesh, standalone HTML. |
 | `floor_plan_generator.py` | `FloorPlanGenerator` | **Legacy.** Horizontal slice -> 2D density grid -> Hough wall detection. Superseded by modular detection pipeline. |
 
-**Configuration:** `config.py` -- all parameters in one file. Key feature flags: `ENABLE_VGGT`, `ENABLE_GEMINI_ANALYSIS`, `ENABLE_METRIC_DEPTH`, `ENABLE_SFM`, `ENABLE_MVS`.
+**Configuration:** `config.py` -- all parameters in one file. Key feature flags: `ENABLE_VGGT`, `ENABLE_GEMINI_ANALYSIS`, `ENABLE_LEARNED_FLOORPLAN`, `ENABLE_METRIC_DEPTH`, `ENABLE_SFM`, `ENABLE_MVS`.
 
 **Outputs written to `./outputs/`:** floor plan PNG/SVG/DXF, interactive 3D HTML, PLY point cloud, optional PLY mesh. All filenames include timestamps.
 
@@ -85,7 +88,8 @@ First run downloads VGGT-1B model (~4GB) from Hugging Face automatically. No lin
 - **Graceful degradation** -- if VGGT unavailable, falls back to legacy pipeline (SfM + relative depth). If Gemini unavailable, floor plan still generated without semantic labels. Each module catches its own exceptions and returns `{"success": False}` dicts.
 - **FloorPlanModel as contract** -- detection populates the model, renderers consume it. Adding a new output format only requires a new renderer.
 - **Gemini door/window enrichment** -- merged into FloorPlanModel with 0.5m deduplication threshold against detected openings.
-- **Config-driven feature flags** -- `ENABLE_VGGT` and `ENABLE_GEMINI_ANALYSIS` toggle both backends independently.
+- **Learned floor plan detection** -- CAGE (NeurIPS 2025) or RoomFormer (CVPR 2023) replaces Hough transform for wall detection. Takes 256x256 density map from point cloud, outputs vectorized room polygons. Falls back to Hough pipeline if models not installed (`FLOORPLAN_FALLBACK_TO_HOUGH=True`).
+- **Config-driven feature flags** -- `ENABLE_VGGT`, `ENABLE_GEMINI_ANALYSIS`, and `ENABLE_LEARNED_FLOORPLAN` toggle backends independently.
 - **Lazy model loading** -- all ML models loaded on first use, not at import time. Prevents startup crashes and reduces memory for unused backends.
 - **Colored logging** -- uses `termcolor.colored` with `[MODULE]` prefixes throughout (e.g., `[VGGT]`, `[Gemini]`, `[WallDetect]`).
 
@@ -111,11 +115,12 @@ else:
 
 | Suite | Count | What it covers |
 |-------|-------|----------------|
+| `test_learned_floorplan_detection.py` | 19 | Density map projection, polygon-to-model conversion, wall dedup, closure scoring, room type labels, model fallback |
 | `test_phase1_metric_depth.py` | 8 | Metric depth estimation, calibration, focal length |
 | `test_phase2_wall_detection.py` | 9 | Wall detection, room segmentation, measurement engine |
-| `test_phase3_rendering.py` | 24 | SVG, DXF, PNG renderers, symbol library |
+| `test_phase3_rendering.py` | 27 | SVG, DXF, PNG renderers, symbol library |
 | `test_phase4_openings.py` | 14 | Opening detection, projection, rendering integration |
-| `test_phase5_quality_scoring.py` | 6 | Quality assessment modes, export policies |
+| `test_phase5_quality_scoring.py` | 7 | Quality assessment modes, export policies |
 | `test_phase9_regression_pack.py` | 1 | Regression test against 9-sample-image baseline (`tests/fixtures/t9_sample_room_baseline.json`) |
 | `test_e2e.py` | 6 | Full pipeline lifecycle, all module imports |
 
@@ -123,8 +128,9 @@ else:
 
 - VGGT model is ~4GB, requires GPU for reasonable performance (MPS/CUDA)
 - Gemini requires Vertex AI credentials (`GOOGLE_CLOUD_PROJECT` env var)
-- Floor plan grid is 100x100 -- coarse resolution for larger rooms
-- Convex hull boundary cannot represent non-convex room shapes
+- CAGE/RoomFormer models require CUDA extensions (deformable attention) -- model weights not yet bundled, falls back to Hough pipeline
+- Legacy floor plan grid is 100x100 -- coarse resolution for larger rooms (learned models use 256x256)
+- Hough fallback uses convex hull boundary which cannot represent non-convex room shapes
 - Gemini door/window placement is approximate (placed at 25%/50%/75% along detected walls)
 - pycolmap may crash with SIGABRT on some macOS configs (auto-disabled when VGGT enabled)
 - `room_reconstructor.py` is ~3500 lines -- the largest module, handles all pipeline orchestration

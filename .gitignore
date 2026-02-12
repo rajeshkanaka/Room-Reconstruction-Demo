@@ -28,6 +28,18 @@ colmap_workspace/dense/
 *.swp
 *.swo
 
+# Model checkpoints (large, download separately)
+external/cage/checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# CAGE build artifacts
+external/cage/models/ops/build/
+external/cage/__pycache__/
+external/cage/**/__pycache__/
+
 # Optional: keep sample_images and docs for demo
 # Uncomment to ignore large binaries:
 # *.pdf
