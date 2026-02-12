@@ -40,5 +40,12 @@ termcolor>=2.3.0
 # Installed from local clone: uv pip install -e ../vggt
 # Requires: torch, torchvision (already above)
 
+# CAGE dependencies (learned floor plan detection)
+pycocotools>=2.0
+fvcore>=0.1.5
+fairscale>=0.4.0
+omegaconf>=2.3.0
+descartes>=1.1.0
+
 # Gemini 3 via Vertex AI
 google-genai>=1.0.0

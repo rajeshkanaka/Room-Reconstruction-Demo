@@ -123,8 +123,13 @@ class VGGTReconstructor:
         # Forward pass
         with torch.no_grad():
             if self.device == "cuda":
-                with torch.cuda.amp.autocast(dtype=torch.float16):
+                with torch.amp.autocast("cuda", dtype=torch.float16):
                     predictions = self.model(input_tensor)
+                # Cast all prediction tensors back to float32 for downstream ops
+                predictions = {
+                    k: v.float() if isinstance(v, torch.Tensor) else v
+                    for k, v in predictions.items()
+                }
             else:
                 predictions = self.model(input_tensor)
 
