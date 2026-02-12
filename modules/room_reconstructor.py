@@ -1137,6 +1137,95 @@ class RoomReconstructor:
         model.orientation = 0.0
         return model
 
+    def _rectangularize_model(self, model):
+        """
+        Snap a Hough-based floor plan model to an axis-aligned bounding box.
+
+        After _normalize_model_orientation aligns the longest wall to +X,
+        some walls may still be at odd angles (e.g., convex hull artifacts).
+        This replaces all walls and the room boundary with a clean AABB
+        rectangle, and snaps openings to the nearest new wall.
+        """
+        from modules.geometry.floor_plan_model import (
+            FloorPlanModel,
+            WallSegment,
+            RoomPolygon,
+        )
+
+        if model is None or not getattr(model, "walls", None):
+            return model
+
+        # Collect all wall endpoints
+        all_pts = []
+        for w in model.walls:
+            all_pts.append(w.start)
+            all_pts.append(w.end)
+        all_pts = np.array(all_pts, dtype=np.float64)
+
+        x_min, y_min = all_pts.min(axis=0)
+        x_max, y_max = all_pts.max(axis=0)
+
+        width = x_max - x_min
+        height = y_max - y_min
+        if width < 0.5 or height < 0.5:
+            return model
+
+        # Create 4 clean axis-aligned walls (clockwise from bottom-left)
+        bl = np.array([x_min, y_min], dtype=np.float64)
+        br = np.array([x_max, y_min], dtype=np.float64)
+        tr = np.array([x_max, y_max], dtype=np.float64)
+        tl = np.array([x_min, y_max], dtype=np.float64)
+
+        thickness = model.walls[0].thickness if model.walls else 0.15
+        new_walls = [
+            WallSegment(start=bl.copy(), end=br.copy(), thickness=thickness),  # bottom
+            WallSegment(start=br.copy(), end=tr.copy(), thickness=thickness),  # right
+            WallSegment(start=tr.copy(), end=tl.copy(), thickness=thickness),  # top
+            WallSegment(start=tl.copy(), end=bl.copy(), thickness=thickness),  # left
+        ]
+
+        # Create rectangular room boundary
+        boundary = np.array([bl, br, tr, tl], dtype=np.float64)
+        room_name = model.rooms[0].name if model.rooms else "Room"
+        room_type = model.rooms[0].room_type if model.rooms else ""
+        room_shape = "rectangular"
+        new_room = RoomPolygon(
+            boundary=boundary,
+            name=room_name,
+            room_type=room_type,
+            room_shape=room_shape,
+        )
+
+        # Snap existing openings to nearest new wall
+        for opening in list(model.doors) + list(model.windows):
+            pos = opening.position
+            best_wall = None
+            best_dist = float("inf")
+            for wall in new_walls:
+                ab = wall.end - wall.start
+                ap = pos - wall.start
+                t = np.clip(np.dot(ap, ab) / max(np.dot(ab, ab), 1e-12), 0.1, 0.9)
+                proj = wall.start + t * ab
+                d = float(np.linalg.norm(pos - proj))
+                if d < best_dist:
+                    best_dist = d
+                    best_wall = wall
+                    best_proj = proj
+            if best_wall is not None:
+                opening.position = best_proj
+
+        model.walls = new_walls
+        model.rooms = [new_room]
+
+        print(
+            colored(
+                f"[RoomReconstructor] Rectangularized: "
+                f"{width:.2f}m x {height:.2f}m = {width * height:.1f}m\u00B2",
+                "cyan",
+            )
+        )
+        return model
+
     def _detect_walls_and_rooms(
         self,
         points: np.ndarray,
@@ -1569,14 +1658,16 @@ class RoomReconstructor:
                 walls=wall_segments, rooms=rooms, doors=doors, windows=windows
             )
             model = self._normalize_model_orientation(model)
+            model = self._rectangularize_model(model)
 
             # 10. Compute measurements
             measurements = self.measurement_engine.compute_measurements(model)
 
             print(
                 colored(
-                    f"[RoomReconstructor] New pipeline: {len(wall_segments)} walls, "
-                    f"{len(rooms)} rooms, {len(doors)} doors, {len(windows)} windows",
+                    f"[RoomReconstructor] New pipeline: {len(model.walls)} walls, "
+                    f"{len(model.rooms)} rooms, {len(model.doors)} doors, "
+                    f"{len(model.windows)} windows",
                     "green",
                 )
             )
