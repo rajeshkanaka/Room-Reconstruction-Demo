@@ -122,11 +122,16 @@ def process_images(files, room_width, progress=gr.Progress()):
         progress(0.95, desc="Preparing outputs...")
 
         # Primary floor plan image (architectural PNG)
-        floor_plan_path = result["outputs"]["floor_plan_image"]
+        outputs = result.get("outputs", {})
+        figures = result.get("figures", {})
+
+        floor_plan_path = outputs.get("floor_plan_image")
+        if not floor_plan_path or not os.path.exists(floor_plan_path):
+            return _error("Floor plan generation failed -- no output image produced.")
         floor_plan_img = Image.open(floor_plan_path)
 
         # 3D plot
-        plotly_fig = result["figures"]["plotly_3d"]
+        plotly_fig = figures.get("plotly_3d")
 
         # Format measurements
         measurements_text = _format_measurements(result, room_width)
@@ -134,7 +139,7 @@ def process_images(files, room_width, progress=gr.Progress()):
         # SVG viewer
         svg_html = ""
         svg_file = None
-        svg_path = result["outputs"].get("floor_plan_svg")
+        svg_path = outputs.get("floor_plan_svg")
         if svg_path and os.path.exists(svg_path):
             with open(svg_path, "r") as f:
                 svg_content = f.read()
@@ -146,16 +151,18 @@ def process_images(files, room_width, progress=gr.Progress()):
             svg_file = svg_path
 
         # DXF file
-        dxf_file = result["outputs"].get("floor_plan_dxf")
+        dxf_file = outputs.get("floor_plan_dxf")
         if dxf_file and not os.path.exists(dxf_file):
             dxf_file = None
 
         # Architectural PNG
-        arch_png_file = result["outputs"].get("floor_plan_arch_png")
+        arch_png_file = outputs.get("floor_plan_arch_png")
         if arch_png_file and not os.path.exists(arch_png_file):
             arch_png_file = None
 
-        status = f"Processed {result['num_images']} images, {result['num_points']:,} 3D points"
+        n_img = result.get("num_images", len(files))
+        n_pts = result.get("num_points", 0)
+        status = f"Processed {n_img} images, {n_pts:,} 3D points"
         progress(1.0, desc="Complete!")
 
         return (

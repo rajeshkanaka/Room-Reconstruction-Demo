@@ -1251,6 +1251,8 @@ class RoomReconstructor:
                             "yellow",
                         )
                     )
+                    if not FLOORPLAN_FALLBACK_TO_HOUGH:
+                        return None
                 except Exception as e:
                     print(
                         colored(
@@ -1916,9 +1918,10 @@ class RoomReconstructor:
             combined_points, calibrated_poses = self._canonicalize_world_frame(
                 combined_points, calibrated_poses
             )
-            # Apply same canonicalization to dense points
+            # Apply same canonicalization to dense points (must use calibrated_poses
+            # so rotation matches combined_points; passing None skips rotation entirely)
             dense_points_scaled, _ = self._canonicalize_world_frame(
-                dense_points_scaled, None
+                dense_points_scaled, calibrated_poses
             )
 
             print(
@@ -1992,7 +1995,8 @@ class RoomReconstructor:
             for room in model.rooms:
                 room.name = display_name
                 room.room_type = gemini_result.room_type
-                room.room_shape = gemini_result.room_shape
+                if not room.room_shape:
+                    room.room_shape = gemini_result.room_shape
 
         # Set model-level semantic fields
         model.reconstruction_backend = "vggt" if self.use_vggt else "legacy"
@@ -2004,6 +2008,13 @@ class RoomReconstructor:
             wall_label = door_info.get("wall", "")
             target_wall = wall_directions.get(wall_label)
             if target_wall is None:
+                print(
+                    colored(
+                        f"[RoomReconstructor] Gemini door on '{wall_label}' wall "
+                        f"has no matching direction -- skipping",
+                        "yellow",
+                    )
+                )
                 continue
 
             # Place door at specified position on wall
@@ -2023,11 +2034,20 @@ class RoomReconstructor:
             width_map = {"narrow": 0.7, "standard": 0.9, "wide": 1.2, "double": 1.8}
             width = width_map.get(door_info.get("width", "standard"), 0.9)
 
-            door_type = door_info.get("type", "interior")
+            # Map Gemini door types to FloorPlanModel contract
+            gemini_to_model_type = {
+                "interior": "single",
+                "exterior": "single",
+                "closet": "closet",
+                "sliding": "sliding",
+            }
+            door_type_raw = door_info.get("type", "interior")
+            door_type = gemini_to_model_type.get(door_type_raw, "single")
             swing = "double" if door_type == "sliding" else "left"
 
-            new_door = DoorOpening(position=pos, width=width, swing_direction=swing)
-            new_door.door_type = door_type
+            new_door = DoorOpening(
+                position=pos, width=width, swing_direction=swing, door_type=door_type
+            )
             new_door.source = "gemini"
             model.doors.append(new_door)
 
@@ -2036,6 +2056,13 @@ class RoomReconstructor:
             wall_label = win_info.get("wall", "")
             target_wall = wall_directions.get(wall_label)
             if target_wall is None:
+                print(
+                    colored(
+                        f"[RoomReconstructor] Gemini window on '{wall_label}' wall "
+                        f"has no matching direction -- skipping",
+                        "yellow",
+                    )
+                )
                 continue
 
             position_label = win_info.get("position", "center")

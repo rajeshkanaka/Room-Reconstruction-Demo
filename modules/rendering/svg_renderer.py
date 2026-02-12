@@ -162,7 +162,7 @@ class SVGRenderer:
         for w in model.walls:
             all_points.extend([w.start, w.end])
         for r in model.rooms:
-            all_points.extend(r.boundary)
+            all_points.extend(np.asarray(r.boundary))
 
         if not all_points:
             return None
@@ -176,8 +176,9 @@ class SVGRenderer:
 
     def _draw_room_fill(self, dwg, group, room, x_min, y_min):
         """Draw a light fill for room area."""
+        boundary = np.asarray(room.boundary)
         points = [
-            (float(p[0] * self.SCALE), float(p[1] * self.SCALE)) for p in room.boundary
+            (float(p[0] * self.SCALE), float(p[1] * self.SCALE)) for p in boundary
         ]
         group.add(
             dwg.polygon(
@@ -397,7 +398,8 @@ class SVGRenderer:
         if len(room.boundary) < 3:
             return
 
-        centroid = room.boundary.mean(axis=0)
+        boundary = np.asarray(room.boundary)
+        centroid = boundary.mean(axis=0)
         cx = float(centroid[0]) * self.SCALE
         cy = float(total_height - centroid[1]) * self.SCALE
 

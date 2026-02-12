@@ -31,17 +31,28 @@ class VGGTReconstructor:
         return "cpu"
 
     def _load_model(self):
-        """Lazy-load the VGGT-1B model."""
+        """Lazy-load the VGGT-1B model.
+
+        Model weights are always kept in float32. On CUDA, torch.amp.autocast
+        handles mixed-precision dynamically during the forward pass (matching
+        VGGT's official demo_gradio.py pattern). This avoids conflicts with
+        VGGT's internal autocast(enabled=False) blocks in head computations.
+        """
         if self.model is not None:
             return
         import torch
         from vggt.models.vggt import VGGT
 
         print(colored("[VGGT] Loading VGGT-1B model...", "cyan"))
-        self.model = VGGT.from_pretrained("facebook/VGGT-1B")
-        dtype = torch.float16 if self.device == "cuda" else torch.float32
-        self.model = self.model.to(self.device).to(dtype).eval()
-        print(colored(f"[VGGT] Model loaded on {self.device} ({dtype})", "green"))
+        try:
+            model = VGGT.from_pretrained("facebook/VGGT-1B")
+            # Always float32 weights -- autocast handles precision dynamically
+            model = model.to(self.device).eval()
+            self.model = model  # Only assign after full success
+        except Exception as e:
+            self.model = None
+            raise RuntimeError(f"Failed to load VGGT model: {e}") from e
+        print(colored(f"[VGGT] Model loaded on {self.device} (float32)", "green"))
 
     def _preprocess(self, images: list[np.ndarray]):
         """
@@ -58,7 +69,15 @@ class VGGTReconstructor:
         processed = []
         orig_sizes = []
 
-        for img in images:
+        for idx, img in enumerate(images):
+            # Handle grayscale and RGBA inputs
+            if img.ndim == 2:
+                img = np.stack([img, img, img], axis=-1)
+                images[idx] = img
+            elif img.shape[2] == 4:
+                img = img[:, :, :3]
+                images[idx] = img
+
             h, w = img.shape[:2]
             orig_sizes.append((h, w))
 
@@ -84,7 +103,7 @@ class VGGTReconstructor:
             pad_h = max_h - t.shape[1]
             pad_w = max_w - t.shape[2]
             if pad_h > 0 or pad_w > 0:
-                t = torch.nn.functional.pad(t, (0, pad_w, 0, pad_h), value=0.0)
+                t = torch.nn.functional.pad(t, (0, pad_w, 0, pad_h), value=1.0)
             padded.append(t)
 
         return torch.stack(padded), orig_sizes  # [S, 3, H, W]
@@ -117,21 +136,22 @@ class VGGTReconstructor:
         input_tensor, orig_sizes = self._preprocess(images)
         _, _, proc_h, proc_w = input_tensor.shape  # processed (VGGT) dims
 
-        dtype = next(self.model.parameters()).dtype
-        input_tensor = input_tensor.to(self.device).to(dtype)
+        # Model is always float32; input goes to device in float32
+        input_tensor = input_tensor.to(self.device).float()
 
-        # Forward pass
+        # Forward pass -- match VGGT official demo_gradio.py pattern:
+        # float32 weights + autocast for dynamic mixed precision on CUDA
         with torch.no_grad():
             if self.device == "cuda":
-                with torch.amp.autocast("cuda", dtype=torch.float16):
+                amp_dtype = (
+                    torch.bfloat16
+                    if torch.cuda.get_device_capability()[0] >= 8
+                    else torch.float16
+                )
+                with torch.amp.autocast("cuda", dtype=amp_dtype):
                     predictions = self.model(input_tensor)
-                # Cast all prediction tensors back to float32 for downstream ops
-                predictions = {
-                    k: v.float() if isinstance(v, torch.Tensor) else v
-                    for k, v in predictions.items()
-                }
             else:
-                predictions = self.model(input_tensor)
+                predictions = self.model(input_tensor.float())
 
         # Extract outputs (all have batch dim [1, S, ...])
         # Decode camera poses from pose encoding
@@ -218,6 +238,11 @@ class VGGTReconstructor:
 
             all_points.append(pts[mask])
             all_colors.append(colors[mask])
+
+        # Free GPU memory now that all tensors are on CPU
+        del predictions, input_tensor
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
 
         point_cloud = np.concatenate(all_points) if all_points else np.zeros((0, 3))
         point_colors = np.concatenate(all_colors) if all_colors else np.zeros((0, 3))

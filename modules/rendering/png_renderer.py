@@ -361,7 +361,8 @@ class PNGRenderer:
         if len(room.boundary) < 3:
             return
 
-        centroid = room.boundary.mean(axis=0)
+        boundary = np.asarray(room.boundary)
+        centroid = boundary.mean(axis=0)
         cx = float(centroid[0])
         cy = float(centroid[1])
 

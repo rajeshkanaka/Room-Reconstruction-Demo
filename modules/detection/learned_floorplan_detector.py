@@ -938,13 +938,6 @@ class LearnedFloorplanDetector:
                 t = np.clip(t, 0.1, 0.9)
                 opening.position = nearest_wall.start + t * wall_vec
 
-            # Assign wall direction
-            d = wall_dirs[nearest_idx]
-            if abs(d[0]) > abs(d[1]):
-                opening.wall_direction = "south" if d[0] > 0 else "north"
-            else:
-                opening.wall_direction = "east" if d[1] > 0 else "west"
-
         return openings
 
     # ------------------------------------------------------------------ #
