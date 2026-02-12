@@ -46,6 +46,7 @@ fvcore>=0.1.5
 fairscale>=0.4.0
 omegaconf>=2.3.0
 descartes>=1.1.0
+cloudpickle>=2.0
 
 # Gemini 3 via Vertex AI
 google-genai>=1.0.0

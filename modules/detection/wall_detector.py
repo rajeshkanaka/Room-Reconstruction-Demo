@@ -70,7 +70,9 @@ class WallDetector:
                     break
 
                 pcd = o3d.geometry.PointCloud()
-                pcd.points = o3d.utility.Vector3dVector(points[remaining].astype(np.float64))
+                pcd.points = o3d.utility.Vector3dVector(
+                    points[remaining].astype(np.float64)
+                )
 
                 plane, inliers_local = pcd.segment_plane(
                     distance_threshold=self.floor_distance_threshold,
@@ -120,9 +122,7 @@ class WallDetector:
                 floor = min(plausible or horizontal, key=lambda c: c["height"])
             else:
                 # Fallback to the most horizontal + well-supported plane.
-                floor = max(
-                    candidates, key=lambda c: c["up_dot"] * len(c["inliers"])
-                )
+                floor = max(candidates, key=lambda c: c["up_dot"] * len(c["inliers"]))
 
             print(
                 colored(
@@ -343,6 +343,9 @@ class WallDetector:
             List of (x1, y1, x2, y2) line segments in depth-map pixel space
         """
         h, w = depth.shape
+
+        # Ensure depth is float64 (OpenCV Sobel rejects float16/int types)
+        depth = np.asarray(depth, dtype=np.float64)
 
         # Compute depth gradient magnitude
         grad_x = cv2.Sobel(depth, cv2.CV_64F, 1, 0, ksize=5)
