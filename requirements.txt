@@ -50,3 +50,6 @@ cloudpickle>=2.0
 
 # Gemini 3 via Vertex AI
 google-genai>=1.0.0
+
+# RunPod Serverless
+runpod>=1.7.0

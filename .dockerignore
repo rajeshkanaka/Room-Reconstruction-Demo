@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Outputs and temp files
+outputs/
+colmap_workspace/
+__pycache__/
+*.pyc
+*.pyo
+
+# Test files
+tests/
+pytest.ini
+
+# Sample images (not needed in production)
+sample_images/
+
+# Local dev files
+*.md
+!requirements.txt
+.claude/
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Docs
+docs/
+logsfromPod.md
+floorplan_pod.png
